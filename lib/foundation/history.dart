@@ -258,6 +258,9 @@ class HistoryManager with ChangeNotifier {
 
   /// Create a isolate to add history to prevent blocking the UI thread.
   Future<void> addHistoryAsync(History newItem) async {
+    if (ComicSource.fromIntKey(newItem.type.value)?.hidden == true) {
+      return;
+    }
     while (_haveAsyncTask) {
       await Future.delayed(Duration(milliseconds: 20));
     }
@@ -281,6 +284,9 @@ class HistoryManager with ChangeNotifier {
   ///
   /// This function would be called when user start reading.
   void addHistory(History newItem) {
+    if (ComicSource.fromIntKey(newItem.type.value)?.hidden == true) {
+      return;
+    }
     _db.execute(_insertHistorySql, [
       newItem.id,
       newItem.title,
@@ -387,7 +393,10 @@ void clearUnfavoritedHistory() {
       select * from history
       order by time DESC;
     """);
-    return res.map((element) => History.fromRow(element)).toList();
+    return res
+        .map((element) => History.fromRow(element))
+        .where((h) => ComicSource.fromIntKey(h.type.value)?.hidden != true)
+        .toList();
   }
 
   /// 获取最近阅读的漫画
@@ -397,15 +406,15 @@ void clearUnfavoritedHistory() {
       order by time DESC
       limit 20;
     """);
-    return res.map((element) => History.fromRow(element)).toList();
+    return res
+        .map((element) => History.fromRow(element))
+        .where((h) => ComicSource.fromIntKey(h.type.value)?.hidden != true)
+        .toList();
   }
 
   /// 获取历史记录的数量
   int count() {
-    var res = _db.select("""
-      select count(*) from history;
-    """);
-    return res.first[0] as int;
+    return getAll().length;
   }
 
   void close() {

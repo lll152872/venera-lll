@@ -8,7 +8,6 @@ import 'package:venera/foundation/app.dart';
 import 'package:venera/foundation/appdata.dart';
 import 'package:venera/foundation/comic_source/comic_source.dart';
 import 'package:venera/foundation/log.dart';
-import 'package:venera/network/app_dio.dart';
 import 'package:venera/network/cookie_jar.dart';
 import 'package:venera/pages/webview.dart';
 import 'package:venera/utils/ext.dart';
@@ -41,17 +40,22 @@ class ComicSourcePage extends StatelessWidget {
       );
     }
     try {
-      var res = await AppDio().get<String>(
-        source.url,
-        options: Options(
-          responseType: ResponseType.plain,
-          headers: {"cache-time": "no"},
-        ),
-      );
+      // Use native HttpClient instead of rhttp for Windows TLS compatibility
+      var client = io.HttpClient()
+        ..connectionTimeout = const Duration(seconds: 15)
+        ..badCertificateCallback = (cert, host, port) => true;
+      var request = await client.getUrl(Uri.parse(source.url));
+      request.headers.set('User-Agent', 'venera');
+      request.headers.set('cache-time', 'no');
+      var response = await request.close();
+      if (response.statusCode != 200) {
+        throw Exception("HTTP ${response.statusCode}");
+      }
+      var body = await response.transform(utf8.decoder).join();
       if (cancel) return;
       controller?.close();
-      await ComicSourceParser().parse(res.data!, source.filePath);
-      await io.File(source.filePath).writeAsString(res.data!);
+      await ComicSourceParser().parse(body, source.filePath);
+      await io.File(source.filePath).writeAsString(body);
       if (ComicSourceManager().availableUpdates.containsKey(source.key)) {
         ComicSourceManager().availableUpdates.remove(source.key);
       }
@@ -73,31 +77,43 @@ class ComicSourcePage extends StatelessWidget {
     if (ComicSource.all().isEmpty) {
       return 0;
     }
-    var dio = AppDio();
-    var res = await dio.get<String>(appdata.settings['comicSourceListUrl']);
-    if (res.statusCode != 200) {
+    // Use native HttpClient instead of rhttp to avoid TLS issues with CDN
+    var uri = Uri.parse(appdata.settings['comicSourceListUrl']);
+    var client = io.HttpClient()
+      ..connectionTimeout = const Duration(seconds: 15)
+      ..badCertificateCallback = (cert, host, port) => true;
+    try {
+      var request = await client.getUrl(uri);
+      request.headers.set('User-Agent', 'venera');
+      var response = await request.close();
+      if (response.statusCode != 200) {
+        return -1;
+      }
+      var body = await response.transform(utf8.decoder).join();
+      var list = jsonDecode(body) as List;
+      var versions = <String, String>{};
+      for (var source in list) {
+        versions[source['key']] = source['version'];
+      }
+      var shouldUpdate = <String>[];
+      for (var source in ComicSource.all()) {
+        if (versions.containsKey(source.key) &&
+            compareSemVer(versions[source.key]!, source.version)) {
+          shouldUpdate.add(source.key);
+        }
+      }
+      if (shouldUpdate.isNotEmpty) {
+        var updates = <String, String>{};
+        for (var key in shouldUpdate) {
+          updates[key] = versions[key]!;
+        }
+        ComicSourceManager().updateAvailableUpdates(updates);
+      }
+      return shouldUpdate.length;
+    } catch (e) {
+      Log.info('ComicSource', 'checkComicSourceUpdate failed: $e');
       return -1;
     }
-    var list = jsonDecode(res.data!) as List;
-    var versions = <String, String>{};
-    for (var source in list) {
-      versions[source['key']] = source['version'];
-    }
-    var shouldUpdate = <String>[];
-    for (var source in ComicSource.all()) {
-      if (versions.containsKey(source.key) &&
-          compareSemVer(versions[source.key]!, source.version)) {
-        shouldUpdate.add(source.key);
-      }
-    }
-    if (shouldUpdate.isNotEmpty) {
-      var updates = <String, String>{};
-      for (var key in shouldUpdate) {
-        updates[key] = versions[key]!;
-      }
-      ComicSourceManager().updateAvailableUpdates(updates);
-    }
-    return shouldUpdate.length;
   }
 
   @override
@@ -302,16 +318,20 @@ class _BodyState extends State<_Body> {
       barrierDismissible: false,
     );
     try {
-      var res = await AppDio().get<String>(
-        url,
-        options: Options(
-          responseType: ResponseType.plain,
-          headers: {"cache-time": "no"},
-        ),
-      );
+      var client = io.HttpClient()
+        ..connectionTimeout = const Duration(seconds: 15)
+        ..badCertificateCallback = (cert, host, port) => true;
+      var request = await client.getUrl(Uri.parse(url));
+      request.headers.set('User-Agent', 'venera');
+      request.headers.set('cache-time', 'no');
+      var response = await request.close();
+      if (response.statusCode != 200) {
+        throw Exception("HTTP ${response.statusCode}");
+      }
+      var body = await response.transform(utf8.decoder).join();
       if (cancel) return;
       controller.close();
-      await addSource(res.data!, fileName);
+      await addSource(body, fileName);
     } catch (e, s) {
       if (cancel) return;
       context.showMessage(message: e.toString());
@@ -354,15 +374,21 @@ class _ComicSourceListState extends State<_ComicSourceList> {
       });
       return;
     }
-    var dio = AppDio();
+    // Use native HttpClient instead of rhttp to avoid TLS issues with CDN on Windows
+    var client = io.HttpClient()
+      ..connectionTimeout = const Duration(seconds: 15)
+      ..badCertificateCallback = (cert, host, port) => true;
     try {
-      var res = await dio.get<String>(controller.text);
-      if (res.statusCode != 200) {
+      var request = await client.getUrl(Uri.parse(controller.text));
+      request.headers.set('User-Agent', 'venera');
+      var response = await request.close();
+      if (response.statusCode != 200) {
         throw "error";
       }
+      var body = await response.transform(utf8.decoder).join();
       if (mounted) {
         setState(() {
-          json = jsonDecode(res.data!);
+          json = jsonDecode(body);
         });
       }
     } catch (e) {
@@ -897,6 +923,19 @@ class _SliverComicSourceState extends State<_SliverComicSource> {
   }
 
   Iterable<Widget> buildSourceSettings() sync* {
+    // Hidden history toggle
+    yield ListTile(
+      title: Text('Hide from History'.tl),
+      subtitle: Text('Comics from this source will not appear in history'.tl),
+      trailing: Switch(
+        value: source.hidden,
+        onChanged: (v) {
+          source.hidden = v;
+          setState(() {});
+        },
+      ),
+    );
+
     // Try to get dynamic settings first (for getters), fall back to cached settings
     var settingsMap = source.getSettingsDynamic() ?? source.settings;
     

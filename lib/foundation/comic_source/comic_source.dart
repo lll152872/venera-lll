@@ -123,6 +123,14 @@ class ComicSource {
   /// Identifier of this source.
   final String key;
 
+  /// If true, histories from this source will be hidden in history page.
+  /// This is a runtime setting persisted in [data].
+  bool get hidden => data["hidden"] == true;
+  set hidden(bool v) {
+    data["hidden"] = v;
+    saveData();
+  }
+
   int get intKey {
     return key.hashCode;
   }

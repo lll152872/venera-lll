@@ -881,6 +881,8 @@
     "Clear specific reader settings for this device": "清除該裝置的特殊閱讀設定",
     "Enable device specific settings": "啟用此裝置特定設定",
     "Ignore Certificate Errors": "忽略證書錯誤",
-    "Mouse scroll speed": "滑鼠滾動速度"
+    "Mouse scroll speed": "滑鼠滾動速度",
+    "Hide from History": "在历史中隐藏",
+    "Comics from this source will not appear in history": "该漫画源的漫画将不显示在历史记录中"
   }
 }

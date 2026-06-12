@@ -699,6 +699,19 @@ class _ContinuousModeState extends State<_ContinuousMode>
   bool prepareToNextChapter = false;
   bool jumpToNextChapter = false;
   bool jumpToPrevChapter = false;
+  bool _jumpedToChapter = false;
+
+  void _tryJumpToNextChapter() {
+    if (_jumpedToChapter) return;
+    if (reader.isLastChapterOfGroup) return;
+    _jumpedToChapter = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _jumpedToChapter = false;
+        reader.toNextChapter();
+      }
+    });
+  }
 
   bool isZoomedIn = false;
   bool isLongPressing = false;
@@ -805,13 +818,9 @@ class _ContinuousModeState extends State<_ContinuousMode>
   void onScroll() {
     if (prepareToPrevChapter) {
       jumpToNextChapter = false;
-      jumpToPrevChapter =
-          scrollController.offset <
-          scrollController.position.minScrollExtent - _kChangeChapterOffset;
+      jumpToPrevChapter = true;
     } else if (prepareToNextChapter) {
-      jumpToNextChapter =
-          scrollController.offset >
-          scrollController.position.maxScrollExtent + _kChangeChapterOffset;
+      jumpToNextChapter = true;
       jumpToPrevChapter = false;
     }
   }
@@ -987,24 +996,18 @@ class _ContinuousModeState extends State<_ContinuousMode>
                   scrollController.position.minScrollExtent &&
               !reader.isFirstChapterOfGroup) {
             if (!prepareToPrevChapter) {
-              jumpToPrevChapter = false;
+              jumpToPrevChapter = true;
               jumpToNextChapter = false;
               context.readerScaffold.setFloatingButton(-1);
               setState(() {
                 prepareToPrevChapter = true;
               });
+            } else {
+              jumpToPrevChapter = true;
             }
           } else if (scrollController.position.pixels >=
-                  scrollController.position.maxScrollExtent &&
-              !reader.isLastChapterOfGroup) {
-            if (!prepareToNextChapter) {
-              jumpToPrevChapter = false;
-              jumpToNextChapter = false;
-              context.readerScaffold.setFloatingButton(1);
-              setState(() {
-                prepareToNextChapter = true;
-              });
-            }
+                  scrollController.position.maxScrollExtent) {
+            _tryJumpToNextChapter();
           } else {
             context.readerScaffold.setFloatingButton(0);
             if (prepareToPrevChapter || prepareToNextChapter) {
