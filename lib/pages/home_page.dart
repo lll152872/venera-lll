@@ -234,7 +234,9 @@ class _HistoryState extends State<_History> {
     if (mounted) {
       setState(() {
         history = HistoryManager().getRecent();
-        count = HistoryManager().count();
+        count = history
+            .where((h) => ComicSource.fromIntKey(h.type.value)?.hidden != true)
+            .length;
       });
     }
   }
@@ -302,17 +304,21 @@ class _HistoryState extends State<_History> {
                     scrollDirection: Axis.horizontal,
                     itemCount: history.length,
                     itemBuilder: (context, index) {
-                      final heroID = history[index].id.hashCode;
+                      final h = history[index];
+                      if (ComicSource.fromIntKey(h.type.value)?.hidden == true) {
+                        return const SizedBox.shrink();
+                      }
+                      final heroID = h.id.hashCode;
                       return SimpleComicTile(
-                        comic: history[index],
+                        comic: h,
                         heroID: heroID,
                         onTap: () {
                           context.to(
                             () => ComicPage(
-                              id: history[index].id,
-                              sourceKey: history[index].type.sourceKey,
-                              cover: history[index].cover,
-                              title: history[index].title,
+                              id: h.id,
+                              sourceKey: h.type.sourceKey,
+                              cover: h.cover,
+                              title: h.title,
                               heroID: heroID,
                             ),
                           );
