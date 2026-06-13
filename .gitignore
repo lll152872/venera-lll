@@ -49,3 +49,4 @@ add_translation.py
 */*/Generated*
 build_output/
 ci_log.txt
+pubspec.lock.bak
