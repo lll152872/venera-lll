@@ -590,6 +590,10 @@ class _SearchHistory extends StatefulWidget {
 class _SearchHistoryState extends State<_SearchHistory> {
   @override
   Widget build(BuildContext context) {
+    // Filter the visible keyword list: entries whose search touched a
+    // hidden source are dropped. This matches the hidden-source filter
+    // applied in `HistoryManager` for reading history.
+    final keywords = appdata.searchHistoryKeywords;
     return SliverList(
       delegate: SliverChildBuilderDelegate(
         (context, index) {
@@ -637,14 +641,14 @@ class _SearchHistoryState extends State<_SearchHistory> {
               ),
             );
           }
-          return buildItem(index - 2);
+          return buildItem(keywords[index - 2]);
         },
-        childCount: 2 + appdata.searchHistory.length,
+        childCount: 2 + keywords.length,
       ),
     ).sliverPaddingHorizontal(16);
   }
 
-  Widget buildItem(int index) {
+  Widget buildItem(String keyword) {
     void showMenu(Offset offset) {
       showMenuX(
         context,
@@ -654,15 +658,14 @@ class _SearchHistoryState extends State<_SearchHistory> {
             icon: Icons.copy,
             text: 'Copy'.tl,
             onClick: () {
-              Clipboard.setData(
-                  ClipboardData(text: appdata.searchHistory[index]));
+              Clipboard.setData(ClipboardData(text: keyword));
             },
           ),
           MenuEntry(
             icon: Icons.delete,
             text: 'Delete'.tl,
             onClick: () {
-              appdata.removeSearchHistory(appdata.searchHistory[index]);
+              appdata.removeSearchHistory(keyword);
               appdata.saveData();
               setState(() {});
             },
@@ -674,7 +677,7 @@ class _SearchHistoryState extends State<_SearchHistory> {
     return Builder(builder: (context) {
       return InkWell(
         onTap: () {
-          widget.search(appdata.searchHistory[index]);
+          widget.search(keyword);
         },
         onLongPress: () {
           var renderBox = context.findRenderObject() as RenderBox;
@@ -698,7 +701,7 @@ class _SearchHistoryState extends State<_SearchHistory> {
             ),
           ),
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          child: Text(appdata.searchHistory[index], style: ts.s14),
+          child: Text(keyword, style: ts.s14),
         ),
       ).paddingBottom(8).paddingHorizontal(4);
     });

@@ -49,7 +49,7 @@ class _SearchResultPageState extends State<SearchResultPage> {
       setState(() {
         this.text = text!;
       });
-      appdata.addSearchHistory(text);
+      appdata.addSearchHistory(text, [sourceKey]);
       controller.currentText = text;
     }
   }
@@ -123,7 +123,7 @@ class _SearchResultPageState extends State<SearchResultPage> {
     );
     options = widget.options ?? const [];
     validateOptions();
-    appdata.addSearchHistory(text);
+    appdata.addSearchHistory(text, [sourceKey]);
     suggestionsController = _SuggestionsController(controller, sourceKey);
     super.initState();
   }

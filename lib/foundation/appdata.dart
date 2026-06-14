@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 import 'package:venera/foundation/app.dart';
+import 'package:venera/foundation/comic_source/comic_source.dart';
 import 'package:venera/foundation/log.dart';
 import 'package:venera/utils/data_sync.dart';
 import 'package:venera/utils/init.dart';
@@ -14,7 +15,47 @@ class Appdata with Init {
 
   final Settings settings = Settings._create();
 
-  var searchHistory = <String>[];
+  /// Search history entries.
+  ///
+  /// Each entry is a map with the shape:
+  /// ```json
+  /// { "keyword": "...", "sourceKeys": ["...", "..."], "time": 123 }
+  /// ```
+  /// - [sourceKeys] is the list of source keys that participated in this
+  ///   search. Empty list means "unknown / legacy data" and is exempt from
+  ///   the hidden-source filter.
+  /// - [time] is a millisecond epoch used for ordering; entries are kept
+  ///   most-recent-first.
+  var searchHistory = <Map<String, dynamic>>[];
+
+  /// Returns whether [sourceKeys] contains any source that the user has
+  /// marked as hidden.
+  ///
+  /// Used to filter search history entries whose search involved a hidden
+  /// source. The check mirrors how `HistoryManager.addHistory` filters
+  /// reading history.
+  static bool _hasHiddenSource(List<String> sourceKeys) {
+    if (sourceKeys.isEmpty) return false;
+    for (var key in sourceKeys) {
+      if (ComicSource.find(key)?.hidden == true) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// Visible search history after applying the hidden-source filter.
+  ///
+  /// Entries whose `sourceKeys` include any hidden source are dropped.
+  /// Returns the keyword list in the same order as the underlying storage
+  /// (most recent first).
+  List<String> get searchHistoryKeywords => searchHistory
+      .where((e) => !_hasHiddenSource(
+            (e["sourceKeys"] as List?)?.map((v) => v.toString()).toList() ??
+                const [],
+          ))
+      .map((e) => e["keyword"] as String)
+      .toList();
 
   bool _isSavingData = false;
 
@@ -51,11 +92,21 @@ class Appdata with Init {
     }
   }
 
-  void addSearchHistory(String keyword) {
-    if (searchHistory.contains(keyword)) {
-      searchHistory.remove(keyword);
+  void addSearchHistory(String keyword, [List<String>? sourceKeys]) {
+    // Filter at write time: if the search touched any hidden source, skip
+    // recording the keyword entirely. This mirrors the behaviour of
+    // `HistoryManager.addHistory` for reading history.
+    if (sourceKeys != null && _hasHiddenSource(sourceKeys)) {
+      return;
     }
-    searchHistory.insert(0, keyword);
+
+    // De-duplicate by keyword (move to front if already present).
+    searchHistory.removeWhere((e) => e["keyword"] == keyword);
+    searchHistory.insert(0, {
+      "keyword": keyword,
+      "sourceKeys": sourceKeys ?? <String>[],
+      "time": DateTime.now().millisecondsSinceEpoch,
+    });
     if (searchHistory.length > 50) {
       searchHistory.removeLast();
     }
@@ -63,7 +114,7 @@ class Appdata with Init {
   }
 
   void removeSearchHistory(String keyword) {
-    searchHistory.remove(keyword);
+    searchHistory.removeWhere((e) => e["keyword"] == keyword);
     saveData();
   }
 
@@ -74,6 +125,29 @@ class Appdata with Init {
 
   Map<String, dynamic> toJson() {
     return {'settings': settings._data, 'searchHistory': searchHistory};
+  }
+
+  /// Parse the persisted `searchHistory` payload into the in-memory list of
+  /// maps. Supports both the current map-based shape and the legacy list
+  /// of plain strings, so users with old `appdata.json` keep their history
+  /// (legacy entries are migrated with an empty `sourceKeys`, which the
+  /// hidden-source filter treats as exempt).
+  static List<Map<String, dynamic>> _parseSearchHistory(dynamic raw) {
+    if (raw is! List) return <Map<String, dynamic>>[];
+    var result = <Map<String, dynamic>>[];
+    for (var entry in raw) {
+      if (entry is Map) {
+        result.add(Map<String, dynamic>.from(entry));
+      } else if (entry is String) {
+        // Legacy format: bare keyword string.
+        result.add({
+          "keyword": entry,
+          "sourceKeys": <String>[],
+          "time": 0,
+        });
+      }
+    }
+    return result;
   }
 
   List<String> splitField(String merged) {
@@ -109,7 +183,7 @@ class Appdata with Init {
         }
       }
     }
-    searchHistory = List.from(data['searchHistory'] ?? []);
+    searchHistory = _parseSearchHistory(data['searchHistory']);
     saveData();
   }
 
@@ -142,7 +216,7 @@ class Appdata with Init {
           settings[key] = json['settings'][key];
         }
       }
-      searchHistory = List.from(json['searchHistory']);
+      searchHistory = _parseSearchHistory(json['searchHistory']);
     } catch (e) {
       Log.error("Appdata", "Failed to load appdata", e);
       Log.info("Appdata", "Resetting appdata");

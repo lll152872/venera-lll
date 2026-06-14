@@ -37,6 +37,13 @@ class _AggregatedSearchPageState extends State<AggregatedSearchPage> {
       }
     }
     this.sources = sources.map((e) => ComicSource.find(e)!).toList();
+    // Record the aggregated search with all participating source keys.
+    // addSearchHistory will silently drop the entry if any of those sources
+    // is hidden, mirroring how `HistoryManager` filters reading history.
+    appdata.addSearchHistory(
+      widget.keyword,
+      this.sources.map((e) => e.key).toList(),
+    );
     _keyword = widget.keyword;
     controller = SearchBarController(
       currentText: widget.keyword,
