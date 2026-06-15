@@ -258,9 +258,6 @@ class HistoryManager with ChangeNotifier {
 
   /// Create a isolate to add history to prevent blocking the UI thread.
   Future<void> addHistoryAsync(History newItem) async {
-    if (ComicSource.fromIntKey(newItem.type.value)?.hidden == true) {
-      return;
-    }
     while (_haveAsyncTask) {
       await Future.delayed(Duration(milliseconds: 20));
     }
@@ -284,9 +281,6 @@ class HistoryManager with ChangeNotifier {
   ///
   /// This function would be called when user start reading.
   void addHistory(History newItem) {
-    if (ComicSource.fromIntKey(newItem.type.value)?.hidden == true) {
-      return;
-    }
     _db.execute(_insertHistorySql, [
       newItem.id,
       newItem.title,
