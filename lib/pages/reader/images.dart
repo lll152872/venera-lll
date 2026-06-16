@@ -678,15 +678,31 @@ class _ContinuousModeState extends State<_ContinuousMode>
   bool disableScroll = false;
 
   late List<bool> cached;
+  int _cachedSize = 0;
 
   int get preCacheCount => appdata.settings["preloadImageCount"];
 
-  /// Whether the user was scrolling the page.
-  /// The gesture detector has a delay to detect tap event.
-  /// To handle the tap event, we need to know if the user was scrolling before the delay.
   bool delayedIsScrolling = false;
-
   var imageStates = <State<ComicImage>>{};
+  bool isZoomedIn = false;
+  bool isLongPressing = false;
+
+  /// ── Cross-chapter seamless scrolling data ──
+  List<String> _allImages = [];
+  List<int> _chapterOffsets = [];
+  List<int> _chapterNums = [];
+  List<int> _chapterLens = [];
+  bool _appendingNext = false;
+  bool _prependingPrev = false;
+  bool _allNextLoaded = false;
+  bool _allPrevLoaded = false;
+  static const int _kPreloadAhead = 10;
+
+  bool prepareToPrevChapter = false;
+  bool prepareToNextChapter = false;
+  bool jumpToNextChapter = false;
+  bool jumpToPrevChapter = false;
+  bool _jumpedToChapter = false;
 
   void delayedSetIsScrolling(bool value) {
     Future.delayed(
@@ -695,36 +711,129 @@ class _ContinuousModeState extends State<_ContinuousMode>
     );
   }
 
-  bool prepareToPrevChapter = false;
-  bool prepareToNextChapter = false;
-  bool jumpToNextChapter = false;
-  bool jumpToPrevChapter = false;
-  bool _jumpedToChapter = false;
-
-  void _tryJumpToNextChapter() {
-    if (_jumpedToChapter) return;
-    if (reader.isLastChapterOfGroup) return;
-    _jumpedToChapter = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        _jumpedToChapter = false;
-        reader.toNextChapter();
-      }
-    });
+  void _resetSplicedState() {
+    _allImages = List.from(reader.images!);
+    _chapterOffsets = [0];
+    _chapterNums = [reader.chapter];
+    _chapterLens = [reader.images!.length];
+    _appendingNext = false;
+    _prependingPrev = false;
+    _allNextLoaded = false;
+    _allPrevLoaded = false;
   }
 
-  bool isZoomedIn = false;
-  bool isLongPressing = false;
+  (int, int, int) _chapterOfPage(int gp) {
+    for (int i = _chapterOffsets.length - 1; i >= 0; i--) {
+      if (gp > _chapterOffsets[i]) {
+        return (_chapterNums[i], gp - _chapterOffsets[i], _chapterLens[i]);
+      }
+    }
+    return (_chapterNums[0], gp, _chapterLens[0]);
+  }
+
+  void _updateReaderStateForSpliced(int globalPage) {
+    var (int chap, int localPage, _) = _chapterOfPage(globalPage);
+    if (reader.chapter != chap) {
+      reader.chapter = chap;
+      int idx = _chapterNums.indexOf(chap);
+      if (idx >= 0 && idx < _chapterLens.length) {
+        int start = _chapterOffsets[idx];
+        reader.images = _allImages.sublist(start, start + _chapterLens[idx]);
+      }
+    }
+    if (reader.page != localPage) {
+      reader.setPage(localPage);
+      context.readerScaffold.update();
+    }
+  }
+
+  String _eidForPage(int globalPage) {
+    for (int i = _chapterOffsets.length - 1; i >= 0; i--) {
+      if (globalPage > _chapterOffsets[i]) {
+        return reader.widget.chapters?.ids
+                .elementAtOrNull(_chapterNums[i] - 1) ??
+            '0';
+      }
+    }
+    return reader.widget.chapters?.ids
+            .elementAtOrNull(_chapterNums[0] - 1) ??
+        '0';
+  }
+
+  Future<void> _appendNextChapter() async {
+    if (_appendingNext || _allNextLoaded || !mounted) return;
+    if (_chapterNums.last >= reader.maxChapter) {
+      _allNextLoaded = true;
+      return;
+    }
+    _appendingNext = true;
+    int nextCh = _chapterNums.last + 1;
+    String eid = reader.widget.chapters?.ids.elementAtOrNull(nextCh - 1) ?? '';
+    if (eid.isEmpty) { _appendingNext = false; _allNextLoaded = true; return; }
+    var res = await reader.type.comicSource!.loadComicPages!(reader.cid, eid);
+    if (!mounted) return;
+    if (res.error) { _appendingNext = false; return; }
+    var imgs = res.data;
+    setState(() {
+      _chapterOffsets.add(_allImages.length);
+      _chapterNums.add(nextCh);
+      _chapterLens.add(imgs.length);
+      _allImages.addAll(imgs);
+      _appendingNext = false;
+    });
+    _growCache(_allImages.length + 16);
+  }
+
+  Future<void> _prependPrevChapter() async {
+    if (_prependingPrev || _allPrevLoaded || !mounted) return;
+    if (_chapterNums.first <= 1) { _allPrevLoaded = true; return; }
+    _prependingPrev = true;
+    int prevCh = _chapterNums.first - 1;
+    String eid = reader.widget.chapters?.ids.elementAtOrNull(prevCh - 1) ?? '';
+    if (eid.isEmpty) { _prependingPrev = false; _allPrevLoaded = true; return; }
+    var res = await reader.type.comicSource!.loadComicPages!(reader.cid, eid);
+    if (!mounted) return;
+    if (res.error) { _prependingPrev = false; return; }
+    var imgs = res.data;
+    int curFirstOff = _chapterOffsets[0];
+    int plen = imgs.length;
+    setState(() {
+      _allImages.insertAll(0, imgs);
+      for (int i = 0; i < _chapterOffsets.length; i++) {
+        _chapterOffsets[i] += plen;
+      }
+      _chapterOffsets.insert(0, 0);
+      _chapterNums.insert(0, prevCh);
+      _chapterLens.insert(0, plen);
+      _prependingPrev = false;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) itemScrollController.jumpTo(index: curFirstOff + plen);
+    });
+    _growCache(_allImages.length + 16);
+  }
+
+  void _growCache(int minSize) {
+    if (_cachedSize < minSize) {
+      int newSize = minSize + 16;
+      var nc = List.filled(newSize, false);
+      for (int i = 0; i < cached.length; i++) { nc[i] = cached[i]; }
+      cached = nc;
+      _cachedSize = newSize;
+    }
+  }
 
   @override
   void initState() {
     reader = context.reader;
     reader._imageViewController = this;
     itemPositionsListener.itemPositions.addListener(onPositionChanged);
-    cached = List.filled(reader.maxPage + 2, false);
+    _resetSplicedState();
+    _cachedSize = _allImages.length + 16;
+    cached = List.filled(_cachedSize, false);
     Future.delayed(
       const Duration(milliseconds: 100),
-      () => cacheImages(reader.page),
+      () => _cacheSplicedImages(reader.page),
     );
     super.initState();
   }
@@ -736,17 +845,34 @@ class _ContinuousModeState extends State<_ContinuousMode>
   }
 
   void onPositionChanged() {
-    if (itemPositionsListener.itemPositions.value.isEmpty) {
-      return;
+    if (itemPositionsListener.itemPositions.value.isEmpty) return;
+    int gp = itemPositionsListener.itemPositions.value.first.index;
+    gp = gp.clamp(1, _allImages.length);
+    _updateReaderStateForSpliced(gp);
+    _cacheSplicedImages(gp);
+    if (_allImages.length - gp <= _kPreloadAhead &&
+        !_appendingNext && !_allNextLoaded) {
+      _appendNextChapter();
     }
-    var page = itemPositionsListener.itemPositions.value.first.index;
-    page = page.clamp(1, reader.maxPage);
-    if (page != reader.page) {
-      reader.setPage(page);
-      context.readerScaffold.update();
+    if (gp <= _kPreloadAhead + 1 && !_prependingPrev && !_allPrevLoaded) {
+      _prependPrevChapter();
     }
-    cacheImages(page);
   }
+
+  void _cacheSplicedImages(int cp) {
+    int preload = preCacheCount;
+    for (int i = cp + 1; i <= cp + preload; i++) {
+      if (i > _allImages.length || (i < cached.length && cached[i])) continue;
+      if (i >= cached.length) break;
+      var key = _allImages[i - 1];
+      if (key.startsWith("file://")) { cached[i] = true; continue; }
+      ImageDownloader.loadComicImage(
+          key, reader.type.comicSource?.key, reader.cid, _eidForPage(i));
+      cached[i] = true;
+    }
+  }
+
+  void cacheImages(int current) => _cacheSplicedImages(current);
 
   double? _futurePosition;
 
@@ -806,13 +932,16 @@ class _ContinuousModeState extends State<_ContinuousMode>
     }
   }
 
-  void cacheImages(int current) {
-    for (int i = current + 1; i <= current + preCacheCount; i++) {
-      if (i <= reader.maxPage && !cached[i]) {
-        _preDownloadImage(i, context);
-        cached[i] = true;
+  void _tryJumpToNextChapter() {
+    if (_jumpedToChapter || !_allNextLoaded) return;
+    if (reader.isLastChapterOfGroup) return;
+    _jumpedToChapter = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _jumpedToChapter = false;
+        reader.toNextChapter();
       }
-    }
+    });
   }
 
   void onScroll() {
@@ -845,7 +974,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
   @override
   Widget build(BuildContext context) {
     Widget widget = ScrollablePositionedList.builder(
-      initialScrollIndex: reader.page,
+      initialScrollIndex: reader.page.clamp(1, _allImages.length),
       itemScrollController: itemScrollController,
       itemPositionsListener: itemPositionsListener,
       scrollControllerCallback: (scrollController) {
@@ -855,7 +984,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
         _scrollController = scrollController;
         _scrollController!.addListener(onScroll);
       },
-      itemCount: reader.maxPage + 2,
+      itemCount: _allImages.length + 2,
       addSemanticIndexes: false,
       scrollDirection: reader.mode == ReaderMode.continuousTopToBottom
           ? Axis.vertical
@@ -867,7 +996,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
           ? const ClampingScrollPhysics()
           : const BouncingScrollPhysics(),
       itemBuilder: (context, index) {
-        if (index == 0 || index == reader.maxPage + 1) {
+        if (index == 0 || index == _allImages.length + 1) {
           return const SizedBox();
         }
         double? width, height;
@@ -878,7 +1007,18 @@ class _ContinuousModeState extends State<_ContinuousMode>
           width = double.infinity;
         }
 
-        ImageProvider image = _createImageProvider(index, context);
+        int imageIndex = index - 1;
+        String imageKey = _allImages[imageIndex];
+        String eid = _eidForPage(index);
+
+        ImageProvider image = ReaderImageProvider(
+          imageKey,
+          reader.type.comicSource?.key,
+          reader.cid,
+          eid,
+          index,
+          enableResize: true,
+        );
 
         return ColoredBox(
           color: context.colorScheme.surface,
@@ -992,22 +1132,27 @@ class _ContinuousModeState extends State<_ContinuousMode>
         if (notification is ScrollUpdateNotification &&
             (scale - 1).abs() < 0.05) {
           if (!scrollController.hasClients) return false;
-          if (scrollController.position.pixels <=
-                  scrollController.position.minScrollExtent &&
-              !reader.isFirstChapterOfGroup) {
-            if (!prepareToPrevChapter) {
-              jumpToPrevChapter = true;
-              jumpToNextChapter = false;
-              context.readerScaffold.setFloatingButton(-1);
-              setState(() {
-                prepareToPrevChapter = true;
-              });
-            } else {
-              jumpToPrevChapter = true;
-            }
-          } else if (scrollController.position.pixels >=
+          if (scrollController.position.pixels >=
                   scrollController.position.maxScrollExtent) {
-            _tryJumpToNextChapter();
+            if (!_allNextLoaded && !_appendingNext) {
+              _appendNextChapter();
+            } else if (_allNextLoaded) {
+              _tryJumpToNextChapter();
+            }
+          } else if (scrollController.position.pixels <=
+                  scrollController.position.minScrollExtent) {
+            if (!_allPrevLoaded && !_prependingPrev) {
+              _prependPrevChapter();
+            } else if (_allPrevLoaded && !reader.isFirstChapterOfGroup) {
+              if (!prepareToPrevChapter) {
+                jumpToPrevChapter = true;
+                jumpToNextChapter = false;
+                context.readerScaffold.setFloatingButton(-1);
+                setState(() { prepareToPrevChapter = true; });
+              } else {
+                jumpToPrevChapter = true;
+              }
+            }
           } else {
             context.readerScaffold.setFloatingButton(0);
             if (prepareToPrevChapter || prepareToNextChapter) {
