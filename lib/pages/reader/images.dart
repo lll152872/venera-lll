@@ -702,8 +702,6 @@ class _ContinuousModeState extends State<_ContinuousMode>
   bool prepareToNextChapter = false;
   bool jumpToNextChapter = false;
   bool jumpToPrevChapter = false;
-  bool _jumpedToChapter = false;
-
   void delayedSetIsScrolling(bool value) {
     Future.delayed(
       const Duration(milliseconds: 300),
@@ -932,18 +930,6 @@ class _ContinuousModeState extends State<_ContinuousMode>
     }
   }
 
-  void _tryJumpToNextChapter() {
-    if (_jumpedToChapter || !_allNextLoaded) return;
-    if (reader.isLastChapterOfGroup) return;
-    _jumpedToChapter = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        _jumpedToChapter = false;
-        reader.toNextChapter();
-      }
-    });
-  }
-
   void onScroll() {
     if (prepareToPrevChapter) {
       jumpToNextChapter = false;
@@ -1136,8 +1122,6 @@ class _ContinuousModeState extends State<_ContinuousMode>
                   scrollController.position.maxScrollExtent) {
             if (!_allNextLoaded && !_appendingNext) {
               _appendNextChapter();
-            } else if (_allNextLoaded) {
-              _tryJumpToNextChapter();
             }
           } else if (scrollController.position.pixels <=
                   scrollController.position.minScrollExtent) {

@@ -1228,6 +1228,37 @@ class LocalFavoritesManager with ChangeNotifier {
         .toList();
   }
 
+  bool isInFolder(String folder, String id, ComicType type) {
+    if (!existsFolder(folder)) return false;
+    var res = _db.select("""
+      select 1 from "$folder"
+      where id == ? and type == ?;
+    """, [id, type.value]);
+    return res.isNotEmpty;
+  }
+
+  String? getUpdateTime(String folder, String id, ComicType type) {
+    var res = _db.select("""
+      select last_update_time from "$folder"
+      where id == ? and type == ?;
+    """, [id, type.value]);
+    if (res.isEmpty) return null;
+    return res.first['last_update_time'];
+  }
+
+  void updateUpdateTimeOnly(
+    String folder,
+    String id,
+    ComicType type,
+    String updateTime,
+  ) {
+    _db.execute("""
+      update "$folder"
+      set last_update_time = ?, last_check_time = ?
+      where id == ? and type == ?;
+    """, [updateTime, DateTime.now().millisecondsSinceEpoch, id, type.value]);
+  }
+
   void markAsRead(String id, ComicType type) {
     var folder = appdata.settings['followUpdatesFolder'];
     if (!existsFolder(folder)) {

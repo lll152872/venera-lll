@@ -11,6 +11,7 @@ import 'package:venera/components/rich_comment_content.dart';
 import 'package:venera/foundation/app.dart';
 import 'package:venera/foundation/appdata.dart';
 import 'package:venera/foundation/comic_source/comic_source.dart';
+import 'package:venera/pages/follow_updates_page.dart';
 import 'package:venera/foundation/comic_type.dart';
 import 'package:venera/foundation/consts.dart';
 import 'package:venera/foundation/favorites.dart';
@@ -274,6 +275,34 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
     }
     if (comic.chapters == null) {
       isDownloaded = LocalManager().isDownloaded(comic.id, comic.comicType, 0);
+    }
+
+    // Auto-check follow updates when opening detail page
+    var followFolder = appdata.settings["followUpdatesFolder"];
+    if (followFolder != null) {
+      var comicType = ComicType(widget.sourceKey.hashCode);
+      if (LocalFavoritesManager()
+          .isInFolder(followFolder, widget.id, comicType)) {
+        var updateTime = comic.findUpdateTime();
+        if (updateTime != null) {
+          var oldTime = LocalFavoritesManager()
+              .getUpdateTime(followFolder, widget.id, comicType);
+          if (oldTime != updateTime) {
+            bool alreadyRead = false;
+            if (comic.chapters != null && history != null) {
+              alreadyRead = history!.ep >= comic.chapters!.length;
+            }
+            if (alreadyRead) {
+              LocalFavoritesManager().updateUpdateTimeOnly(
+                  followFolder, widget.id, comicType, updateTime);
+            } else {
+              LocalFavoritesManager().updateUpdateTime(
+                  followFolder, widget.id, comicType, updateTime);
+            }
+            updateFollowUpdatesUI();
+          }
+        }
+      }
     }
   }
 

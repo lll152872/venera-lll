@@ -613,6 +613,7 @@ abstract mixin class _ReaderLocation {
   int get maxChapter;
 
   bool get isLoading;
+  set isLoading(bool value);
 
   String get cid;
 
@@ -700,6 +701,7 @@ abstract mixin class _ReaderLocation {
       chapter = c;
       page = 1;
       _jumpToLastPageOnLoad = toLastPage;
+      isLoading = true;
       update();
       return true;
     }
