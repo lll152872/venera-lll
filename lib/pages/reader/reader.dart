@@ -615,6 +615,9 @@ abstract mixin class _ReaderLocation {
   bool get isLoading;
   set isLoading(bool value);
 
+  List<String>? get images;
+  set images(List<String>? value);
+
   String get cid;
 
   ComicType get type;
@@ -702,6 +705,7 @@ abstract mixin class _ReaderLocation {
       page = 1;
       _jumpToLastPageOnLoad = toLastPage;
       isLoading = true;
+      images = null;
       update();
       return true;
     }
