@@ -702,6 +702,12 @@ class _ContinuousModeState extends State<_ContinuousMode>
   bool prepareToNextChapter = false;
   bool jumpToNextChapter = false;
   bool jumpToPrevChapter = false;
+
+  /// True after a chapter jump (toChapter) to suppress prepend until user
+  /// actively scrolls up.
+  bool _suppressPrepend = false;
+  double? _lastScrollPos;
+  bool _userScrolledUp = false;
   void delayedSetIsScrolling(bool value) {
     Future.delayed(
       const Duration(milliseconds: 300),
@@ -821,14 +827,20 @@ class _ContinuousModeState extends State<_ContinuousMode>
     }
   }
 
+  int _lastKnownChapter = 0;
+
   @override
   void initState() {
     reader = context.reader;
+    _lastKnownChapter = reader.chapter;
     reader._imageViewController = this;
     itemPositionsListener.itemPositions.addListener(onPositionChanged);
     _resetSplicedState();
     _cachedSize = _allImages.length + 16;
     cached = List.filled(_cachedSize, false);
+    // Suppress prepend on fresh init (covers chapter jump via toChapter)
+    _suppressPrepend = true;
+    _userScrolledUp = false;
     Future.delayed(
       const Duration(milliseconds: 100),
       () => _cacheSplicedImages(reader.page),
@@ -842,6 +854,22 @@ class _ContinuousModeState extends State<_ContinuousMode>
     super.dispose();
   }
 
+  @override
+  void didUpdateWidget(covariant _ContinuousMode oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // When Flutter reuses this widget (key unchanged), detect chapter changes
+    // and reset spliced state to avoid showing stale images from previous chapter
+    if (reader.chapter != _lastKnownChapter) {
+      _resetSplicedState();
+      _cachedSize = _allImages.length + 16;
+      cached = List.filled(_cachedSize, false);
+      _lastKnownChapter = reader.chapter;
+      // Suppress prepend after chapter jump
+      _suppressPrepend = true;
+      _userScrolledUp = false;
+    }
+  }
+
   void onPositionChanged() {
     if (itemPositionsListener.itemPositions.value.isEmpty) return;
     int gp = itemPositionsListener.itemPositions.value.first.index;
@@ -852,7 +880,21 @@ class _ContinuousModeState extends State<_ContinuousMode>
         !_appendingNext && !_allNextLoaded) {
       _appendNextChapter();
     }
-    if (gp <= _kPreloadAhead + 1 && !_prependingPrev && !_allPrevLoaded) {
+    // Detect user scrolling up: if gp decreased since last check, mark user intent
+    if (_suppressPrepend) {
+      if (_lastScrollPos == null) {
+        _lastScrollPos = gp.toDouble();
+      } else if (gp < _lastScrollPos! - 1) {
+        _userScrolledUp = true;
+      }
+      if (_userScrolledUp) {
+        _suppressPrepend = false;
+      }
+      _lastScrollPos = gp.toDouble();
+    }
+    if (!_suppressPrepend &&
+        gp <= _kPreloadAhead + 1 &&
+        !_prependingPrev && !_allPrevLoaded) {
       _prependPrevChapter();
     }
   }
