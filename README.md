@@ -1,14 +1,20 @@
-# Due to my limited time and energy, this project is no longer maintained. Feel free to fork it.
-# 由于本人精力有限, 此项目已停止维护, 欢迎fork
+# venera (Fork — 持续维护)
 
-# venera
+> 上游 venera-app/venera 已停止维护。此 fork 由 [lll152872](https://github.com/lll152872) 维护，新增自动跳章、跨章无缝滚动、书源隐藏等功能。
+
 [![flutter](https://img.shields.io/badge/flutter-3.41.4-blue)](https://flutter.dev/)
 [![License](https://img.shields.io/github/license/venera-app/venera)](https://github.com/venera-app/venera/blob/master/LICENSE)
-[![stars](https://img.shields.io/github/stars/venera-app/venera?style=flat)](https://github.com/venera-app/venera/stargazers)
+[![stars](https://img.shields.io/github/stars/lll152872/venera?style=flat)](https://github.com/lll152872/venera/stargazers)
 
-[![Download](https://img.shields.io/github/v/release/venera-app/venera)](https://github.com/venera-app/venera/releases)
-[![AUR Version](https://img.shields.io/aur/version/venera-bin)](https://aur.archlinux.org/packages/venera-bin)
-[![F-Droid Version](https://img.shields.io/f-droid/v/com.github.wgh136.venera)](https://f-droid.org/packages/com.github.wgh136.venera/)
+[![Download](https://img.shields.io/github/v/release/lll152872/venera)](https://github.com/lll152872/venera/releases)
+
+## 新增功能
+
+- 📖 **自动跳章**：阅读完当前章节自动跳转下一章
+- 🔗 **跨章无缝滚动**：连续滚动模式支持跨章节拼接阅读，真正的无缝体验
+- 👁️ **书源隐藏**：可隐藏不想看到的漫画源，搜索/历史/收藏同步过滤
+- 🔄 **章节正序/倒序**：章节列表支持正序倒序切换
+- 📡 **自动追更**：打开漫画详情页自动判断更新
 
 A comic reader that support reading local and network comics.
 
