@@ -283,21 +283,24 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
       var comicType = ComicType(widget.sourceKey.hashCode);
       if (LocalFavoritesManager()
           .isInFolder(followFolder, widget.id, comicType)) {
-        var updateTime = comic.findUpdateTime();
-        if (updateTime != null) {
-          var oldTime = LocalFavoritesManager()
-              .getUpdateTime(followFolder, widget.id, comicType);
-          if (oldTime != updateTime) {
+        var newChapterCount = comic.chapters?.length;
+        if (newChapterCount != null) {
+          var oldChapterCount = LocalFavoritesManager()
+              .getChapterCount(followFolder, widget.id, comicType);
+          if (oldChapterCount == null || newChapterCount > oldChapterCount) {
             bool alreadyRead = false;
-            if (comic.chapters != null && history != null) {
-              alreadyRead = history!.ep >= comic.chapters!.length;
+            if (history != null) {
+              alreadyRead = history!.ep >= newChapterCount;
             }
+            var updateTime = comic.findUpdateTime() ?? DateTime.now().toString().split(" ").first;
             if (alreadyRead) {
               LocalFavoritesManager().updateUpdateTimeOnly(
-                  followFolder, widget.id, comicType, updateTime);
+                  followFolder, widget.id, comicType, updateTime,
+                  chapterCount: newChapterCount);
             } else {
               LocalFavoritesManager().updateUpdateTime(
-                  followFolder, widget.id, comicType, updateTime);
+                  followFolder, widget.id, comicType, updateTime,
+                  chapterCount: newChapterCount);
             }
             updateFollowUpdatesUI();
           }

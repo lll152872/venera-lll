@@ -48,18 +48,19 @@ Future<ComicUpdateResult> updateComic(
       LocalFavoritesManager().updateInfo(folder, item, false);
 
       var updated = false;
-      var updateTime = newInfo.findUpdateTime();
-      if (updateTime != null && updateTime != c.updateTime) {
-        LocalFavoritesManager().updateUpdateTime(
-          folder,
-          c.id,
-          c.type,
-          updateTime,
-        );
+      var updateTime = newInfo.findUpdateTime() ?? DateTime.now().toString().split(" ").first;
+      var newChapterCount = newInfo.chapters?.length;
+      if (newChapterCount != null &&
+          (c.chapterCount == null || newChapterCount > c.chapterCount!)) {
         updated = true;
-      } else {
-        LocalFavoritesManager().updateCheckTime(folder, c.id, c.type);
       }
+      LocalFavoritesManager().updateUpdateTime(
+        folder,
+        c.id,
+        c.type,
+        updateTime,
+        chapterCount: newChapterCount,
+      );
       return ComicUpdateResult(updated, null);
     } catch (e, s) {
       Log.error("Check Updates", e, s);
@@ -103,7 +104,7 @@ void updateFolderBase(
     if (!ignoreCheckTime) {
       var lastCheckTime = comic.lastCheckTime;
       if (lastCheckTime != null &&
-          DateTime.now().difference(lastCheckTime).inDays < 1) {
+          DateTime.now().difference(lastCheckTime).inHours < 1) {
         current++;
         stream.add(UpdateProgress(total, current, errors, updated));
         continue;

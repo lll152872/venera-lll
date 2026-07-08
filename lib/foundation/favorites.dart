@@ -165,12 +165,15 @@ class FavoriteItemWithUpdateInfo extends FavoriteItem {
 
   bool hasNewUpdate;
 
+  int? chapterCount;
+
   FavoriteItemWithUpdateInfo(
     FavoriteItem item,
     this.updateTime,
     this.hasNewUpdate,
-    int? lastCheckTime,
-  )   : lastCheckTime = lastCheckTime == null
+    int? lastCheckTime, {
+    this.chapterCount,
+  })  : lastCheckTime = lastCheckTime == null
             ? null
             : DateTime.fromMillisecondsSinceEpoch(lastCheckTime),
         super(
@@ -184,9 +187,9 @@ class FavoriteItemWithUpdateInfo extends FavoriteItem {
 
   @override
   String get description {
-    var updateTime = this.updateTime ?? "Unknown";
+    var chCount = chapterCount != null ? "$chapterCount 话" : "?";
     var sourceName = type.comicSource?.name ?? "Unknown";
-    return "$updateTime | $sourceName";
+    return "$chCount | $sourceName";
   }
 
   @override
@@ -194,12 +197,13 @@ class FavoriteItemWithUpdateInfo extends FavoriteItem {
     return other is FavoriteItemWithUpdateInfo &&
         other.updateTime == updateTime &&
         other.hasNewUpdate == hasNewUpdate &&
+        other.chapterCount == chapterCount &&
         super == other;
   }
 
   @override
   int get hashCode =>
-      super.hashCode ^ updateTime.hashCode ^ hasNewUpdate.hashCode;
+      super.hashCode ^ updateTime.hashCode ^ hasNewUpdate.hashCode ^ chapterCount.hashCode;
 }
 
 class LocalFavoritesManager with ChangeNotifier {
@@ -1144,30 +1148,49 @@ class LocalFavoritesManager with ChangeNotifier {
         add column last_check_time int;
       """);
     }
+    if (!columns.any((element) => element["name"] == "chapter_count")) {
+      _db.execute("""
+        alter table "$table"
+        add column chapter_count int;
+      """);
+    }
   }
 
   void updateUpdateTime(
     String folder,
     String id,
     ComicType type,
-    String updateTime,
-  ) {
-    var oldTime = _db.select("""
-      select last_update_time from "$folder"
+    String updateTime, {
+    int? chapterCount,
+  }) {
+    var row = _db.select("""
+      select last_update_time, ifnull(chapter_count, 0) as chapter_count from "$folder"
       where id == ? and type == ?;
-    """, [id, type.value]).first['last_update_time'];
-    var hasNewUpdate = oldTime != updateTime;
-    _db.execute("""
+    """, [id, type.value]).first;
+    var oldTime = row['last_update_time'];
+    var oldChapterCount = row['chapter_count'] as int? ?? 0;
+    // Use chapter count as primary signal, fall back to updateTime
+    var hasNewUpdate = chapterCount != null
+        ? chapterCount > oldChapterCount
+        : oldTime != updateTime;
+    var sql = """
       update "$folder"
       set last_update_time = ?, has_new_update = ?, last_check_time = ?
-      where id == ? and type == ?;
-    """, [
+    """;
+    var params = <dynamic>[
       updateTime,
       hasNewUpdate ? 1 : 0,
       DateTime.now().millisecondsSinceEpoch,
-      id,
-      type.value,
-    ]);
+    ];
+    if (chapterCount != null) {
+      sql += ", chapter_count = ?";
+      params.add(chapterCount);
+    }
+    sql += """
+      where id == ? and type == ?;
+    """;
+    params.addAll([id, type.value]);
+    _db.execute(sql, params);
   }
 
   void updateCheckTime(
@@ -1204,6 +1227,7 @@ class LocalFavoritesManager with ChangeNotifier {
             e['last_update_time'],
             e['has_new_update'] == 1,
             e['last_check_time'],
+            chapterCount: e['chapter_count'],
           ),
         )
         .toList();
@@ -1223,6 +1247,7 @@ class LocalFavoritesManager with ChangeNotifier {
             e['last_update_time'],
             e['has_new_update'] == 1,
             e['last_check_time'],
+            chapterCount: e['chapter_count'],
           ),
         )
         .toList();
@@ -1246,17 +1271,39 @@ class LocalFavoritesManager with ChangeNotifier {
     return res.first['last_update_time'];
   }
 
+  int? getChapterCount(String folder, String id, ComicType type) {
+    var res = _db.select("""
+      select chapter_count from "$folder"
+      where id == ? and type == ?;
+    """, [id, type.value]);
+    if (res.isEmpty) return null;
+    return res.first['chapter_count'];
+  }
+
   void updateUpdateTimeOnly(
     String folder,
     String id,
     ComicType type,
-    String updateTime,
-  ) {
-    _db.execute("""
+    String updateTime, {
+    int? chapterCount,
+  }) {
+    var sql = """
       update "$folder"
       set last_update_time = ?, last_check_time = ?
+    """;
+    var params = <dynamic>[
+      updateTime,
+      DateTime.now().millisecondsSinceEpoch,
+    ];
+    if (chapterCount != null) {
+      sql += ", chapter_count = ?";
+      params.add(chapterCount);
+    }
+    sql += """
       where id == ? and type == ?;
-    """, [updateTime, DateTime.now().millisecondsSinceEpoch, id, type.value]);
+    """;
+    params.addAll([id, type.value]);
+    _db.execute(sql, params);
   }
 
   void markAsRead(String id, ComicType type) {
