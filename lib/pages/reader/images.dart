@@ -698,6 +698,64 @@ class _ContinuousModeState extends State<_ContinuousMode>
   bool _allPrevLoaded = false;
   static const int _kPreloadAhead = 10;
 
+  /// ── Download concurrency limiter ──
+  /// Prevents launching too many parallel image downloads at once.
+  static const int _kMaxConcurrentDownloads = 3;
+  int _activeDownloads = 0;
+  final List<void Function()> _downloadQueue = [];
+
+  void _enqueueDownload(void Function() task) {
+    if (_activeDownloads >= _kMaxConcurrentDownloads) {
+      _downloadQueue.add(task);
+    } else {
+      _activeDownloads++;
+      task();
+    }
+  }
+
+  void _onDownloadComplete() {
+    _activeDownloads--;
+    if (_activeDownloads < _kMaxConcurrentDownloads && _downloadQueue.isNotEmpty) {
+      _activeDownloads++;
+      var task = _downloadQueue.removeAt(0);
+      task();
+    }
+  }
+
+  /// ── Scroll direction aware preloading ──
+  int? _lastGpForDirection;
+  bool _scrollingForward = true;
+
+  /// ── Chapter memory unloading ──
+  /// Keep at most _kMaxChaptersInMemory chapters in _allImages.
+  /// When exceeded, remove oldest chapters' URLs from the front.
+  /// _chapterOffsets/Nums/Lens are preserved for re-fetch on scroll-back.
+  static const int _kMaxChaptersInMemory = 10;
+
+  /// Unload excess old chapters from the front of _allImages when chapter
+  /// count exceeds _kMaxChaptersInMemory.
+  void _unloadExcessChapters() {
+    if (_chapterOffsets.length <= _kMaxChaptersInMemory) return;
+    setState(() {
+      while (_chapterOffsets.length > _kMaxChaptersInMemory) {
+        // Remove oldest chapter (index 0)
+        int removeCount = _chapterLens[0];
+        _allImages.removeRange(0, removeCount);
+        _chapterOffsets.removeAt(0);
+        _chapterNums.removeAt(0);
+        _chapterLens.removeAt(0);
+        // Adjust remaining offsets
+        for (int i = 0; i < _chapterOffsets.length; i++) {
+          _chapterOffsets[i] -= removeCount;
+        }
+        // Clear cached markers for removed range
+        if (cached.length > removeCount) {
+          cached.removeRange(0, removeCount);
+        }
+      }
+    });
+  }
+
   bool prepareToPrevChapter = false;
   bool prepareToNextChapter = false;
   bool jumpToNextChapter = false;
@@ -786,6 +844,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
       _appendingNext = false;
     });
     _growCache(_allImages.length + 16);
+    _unloadExcessChapters();
   }
 
   Future<void> _prependPrevChapter() async {
@@ -815,6 +874,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
       if (mounted) itemScrollController.jumpTo(index: curFirstOff + plen);
     });
     _growCache(_allImages.length + 16);
+    _unloadExcessChapters();
   }
 
   void _growCache(int minSize) {
@@ -900,15 +960,48 @@ class _ContinuousModeState extends State<_ContinuousMode>
   }
 
   void _cacheSplicedImages(int cp) {
+    // Detect scroll direction
+    if (_lastGpForDirection != null) {
+      if (cp > _lastGpForDirection!) {
+        _scrollingForward = true;
+      } else if (cp < _lastGpForDirection!) {
+        _scrollingForward = false;
+      }
+    }
+    _lastGpForDirection = cp;
+
     int preload = preCacheCount;
-    for (int i = cp + 1; i <= cp + preload; i++) {
-      if (i > _allImages.length || (i < cached.length && cached[i])) continue;
-      if (i >= cached.length) break;
+    // Build list of pages to preload, prioritizing scroll direction
+    List<int> pagesToLoad = [];
+    if (_scrollingForward) {
+      for (int i = cp + 1; i <= cp + preload; i++) {
+        pagesToLoad.add(i);
+      }
+      // Also preload a few behind, but fewer
+      for (int i = cp - 1; i >= cp - (preload ~/ 2) && i >= 1; i--) {
+        pagesToLoad.add(i);
+      }
+    } else {
+      for (int i = cp - 1; i >= cp - preload && i >= 1; i--) {
+        pagesToLoad.add(i);
+      }
+      for (int i = cp + 1; i <= cp + (preload ~/ 2); i++) {
+        pagesToLoad.add(i);
+      }
+    }
+
+    for (int i in pagesToLoad) {
+      if (i > _allImages.length || i < 1) continue;
+      if (i < cached.length && cached[i]) continue;
+      if (i >= cached.length) continue;
       var key = _allImages[i - 1];
       if (key.startsWith("file://")) { cached[i] = true; continue; }
-      ImageDownloader.loadComicImage(
-          key, reader.type.comicSource?.key, reader.cid, _eidForPage(i));
-      cached[i] = true;
+      _enqueueDownload(() {
+        ImageDownloader.loadComicImage(
+            key, reader.type.comicSource?.key, reader.cid, _eidForPage(i));
+        cached[i] = true;
+        _onDownloadComplete();
+      });
     }
   }
 
