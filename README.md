@@ -2,7 +2,7 @@
 
 > 上游 venera-app/venera 已停止维护。此 fork 由 [lll152872](https://github.com/lll152872) 维护，新增自动跳章、跨章无缝滚动、书源隐藏等功能。
 
-[![flutter](https://img.shields.io/badge/flutter-3.41.4-blue)](https://flutter.dev/)
+[![flutter](https://img.shields.io/badge/flutter-3.44.0-blue)](https://flutter.dev/)
 [![License](https://img.shields.io/github/license/venera-app/venera)](https://github.com/venera-app/venera/blob/master/LICENSE)
 [![stars](https://img.shields.io/github/stars/lll152872/venera?style=flat)](https://github.com/lll152872/venera/stargazers)
 

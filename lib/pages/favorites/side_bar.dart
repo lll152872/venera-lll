@@ -43,6 +43,7 @@ class _LeftBarState extends State<_LeftBar> implements FolderList {
     findNetworkFolders();
     appdata.settings.addListener(updateFolders);
     LocalFavoritesManager().addListener(updateFolders);
+    QuickSearchManager().addListener(updateQuickSearch);
     super.initState();
   }
 
@@ -51,6 +52,12 @@ class _LeftBarState extends State<_LeftBar> implements FolderList {
     super.dispose();
     appdata.settings.removeListener(updateFolders);
     LocalFavoritesManager().removeListener(updateFolders);
+    QuickSearchManager().removeListener(updateQuickSearch);
+  }
+
+  void updateQuickSearch() {
+    if (!mounted) return;
+    setState(() {});
   }
 
   @override
@@ -88,7 +95,7 @@ class _LeftBarState extends State<_LeftBar> implements FolderList {
               padding: widget.withAppbar
                   ? EdgeInsets.zero
                   : EdgeInsets.only(top: context.padding.top),
-              itemCount: folders.length + networkFolders.length + 3,
+              itemCount: folders.length + networkFolders.length + 3 + _quickSearchCount(),
               itemBuilder: (context, index) {
                 if (index == 0) {
                   return buildLocalTitle();
@@ -106,7 +113,15 @@ class _LeftBarState extends State<_LeftBar> implements FolderList {
                   return buildNetworkTitle();
                 }
                 index--;
-                return buildNetworkFolder(networkFolders[index]);
+                if (index < networkFolders.length) {
+                  return buildNetworkFolder(networkFolders[index]);
+                }
+                index -= networkFolders.length;
+                if (index == 0) {
+                  return buildQuickSearchTitle();
+                }
+                index--;
+                return buildQuickSearchEntry(index);
               },
             ),
           )
@@ -299,5 +314,95 @@ class _LeftBarState extends State<_LeftBar> implements FolderList {
       folders = LocalFavoritesManager().folderNames;
       findNetworkFolders();
     });
+  }
+
+  int _quickSearchCount() {
+    var entries = QuickSearchManager().entries;
+    return entries.isEmpty ? 0 : entries.length + 1; // +1 for title
+  }
+
+  Widget buildQuickSearchTitle() {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      margin: const EdgeInsets.only(top: 8),
+      decoration: BoxDecoration(
+        border: Border(
+          top: BorderSide(
+            color: context.colorScheme.outlineVariant,
+            width: 0.6,
+          ),
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            Icons.search,
+            color: context.colorScheme.secondary,
+          ),
+          const SizedBox(width: 12),
+          Text("Quick Search".tl),
+        ],
+      ).paddingHorizontal(16),
+    );
+  }
+
+  Widget buildQuickSearchEntry(int index) {
+    var entries = QuickSearchManager().entries;
+    if (index < 0 || index >= entries.length) {
+      return const SizedBox();
+    }
+    var entry = entries[index];
+    return InkWell(
+      onTap: () {
+        context.to(() => SearchResultPage(
+          text: entry.keyword,
+          sourceKey: entry.sourceKey,
+        ));
+      },
+      onLongPress: () {
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Text("Remove".tl),
+            content: Text("Remove this quick search?".tl),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text("Cancel".tl),
+              ),
+              TextButton(
+                onPressed: () {
+                  QuickSearchManager().removeAt(index);
+                  Navigator.pop(context);
+                },
+                child: Text("Confirm".tl),
+              ),
+            ],
+          ),
+        );
+      },
+      child: Container(
+        height: 42,
+        alignment: Alignment.centerLeft,
+        padding: const EdgeInsets.only(left: 32),
+        child: Row(
+          children: [
+            Icon(Icons.search, size: 16, color: context.colorScheme.outline),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                entry.keyword,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            Text(
+              entry.sourceName,
+              style: ts.s12.withColor(context.colorScheme.outline),
+            ).paddingRight(12),
+          ],
+        ),
+      ),
+    );
   }
 }

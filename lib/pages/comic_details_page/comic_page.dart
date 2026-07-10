@@ -11,6 +11,7 @@ import 'package:venera/components/rich_comment_content.dart';
 import 'package:venera/foundation/app.dart';
 import 'package:venera/foundation/appdata.dart';
 import 'package:venera/foundation/comic_source/comic_source.dart';
+import 'package:venera/foundation/quick_search.dart';
 import 'package:venera/pages/follow_updates_page.dart';
 import 'package:venera/foundation/comic_type.dart';
 import 'package:venera/foundation/consts.dart';
@@ -564,6 +565,58 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
 
     int i = 0;
 
+    void showTagMenu(
+      BuildContext context,
+      String text,
+      VoidCallback? onTap, [
+      Offset? position,
+    ]) {
+      final sourceKey = comic.sourceKey;
+      final sourceName = ComicSource.find(sourceKey)?.name ?? sourceKey;
+      final isSaved = QuickSearchManager().contains(text, sourceKey);
+
+      List<MenuEntry> menus = [];
+      if (onTap != null) {
+        menus.add(MenuEntry(
+          icon: Icons.remove_red_eye,
+          text: "View".tl,
+          onClick: onTap,
+        ));
+      }
+      menus.add(MenuEntry(
+        icon: Icons.copy,
+        text: "Copy".tl,
+        onClick: () {
+          Clipboard.setData(ClipboardData(text: text));
+          context.showMessage(message: "Copied".tl);
+        },
+      ));
+      menus.add(MenuEntry(
+        icon: isSaved ? Icons.bookmark : Icons.bookmark_add_outlined,
+        text: isSaved ? "Remove Quick Search".tl : "Save as Quick Search".tl,
+        onClick: () {
+          if (isSaved) {
+            QuickSearchManager().remove(text, sourceKey);
+            context.showMessage(message: "Removed".tl);
+          } else {
+            QuickSearchManager().add(QuickSearchEntry(
+              keyword: text,
+              sourceKey: sourceKey,
+              sourceName: sourceName,
+              searchType: 'tag',
+            ));
+            context.showMessage(message: "Saved".tl);
+          }
+        },
+      ));
+
+      if (position != null) {
+        showMenuX(context, position, menus);
+      } else {
+        showMenuX(context, Offset.zero, menus);
+      }
+    }
+
     Widget buildTag({
       required String text,
       VoidCallback? onTap,
@@ -600,26 +653,41 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
             borderRadius: borderRadius,
             onTap: onTap,
             onLongPress: () {
-              Clipboard.setData(ClipboardData(text: text));
-              context.showMessage(message: "Copied".tl);
+              if (isTitle) {
+                Clipboard.setData(ClipboardData(text: text));
+                context.showMessage(message: "Copied".tl);
+              } else {
+                showTagMenu(context, text, onTap);
+              }
             },
             onSecondaryTapDown: (details) {
-              showMenuX(context, details.globalPosition, [
-                MenuEntry(
-                  icon: Icons.remove_red_eye,
-                  text: "View".tl,
-                  onClick: onTap,
-                ),
-                MenuEntry(
-                  icon: Icons.copy,
-                  text: "Copy".tl,
-                  onClick: () {
-                    Clipboard.setData(ClipboardData(text: text));
-                    context.showMessage(message: "Copied".tl);
-                  },
-                ),
-              ]);
+              if (isTitle) {
+                showMenuX(context, details.globalPosition, [
+                  MenuEntry(
+                    icon: Icons.copy,
+                    text: "Copy".tl,
+                    onClick: () {
+                      Clipboard.setData(ClipboardData(text: text));
+                      context.showMessage(message: "Copied".tl);
+                    },
+                  ),
+                ]);
+              } else {
+                showTagMenu(context, text, onTap, details.globalPosition);
+              }
             },
+            child: Text(text).padding(padding),
+          ),
+        );
+      } else if (!isTitle) {
+        return Material(
+          color: color,
+          borderRadius: borderRadius,
+          child: InkWell(
+            borderRadius: borderRadius,
+            onLongPress: () => showTagMenu(context, text, null),
+            onSecondaryTapDown: (details) =>
+                showTagMenu(context, text, null, details.globalPosition),
             child: Text(text).padding(padding),
           ),
         );
@@ -1098,3 +1166,4 @@ class _ComicPageLoadingPlaceHolder extends StatelessWidget {
     );
   }
 }
+
