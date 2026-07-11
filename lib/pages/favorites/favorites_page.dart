@@ -32,6 +32,7 @@ part 'favorite_actions.dart';
 part 'side_bar.dart';
 part 'local_favorites_page.dart';
 part 'network_favorites_page.dart';
+part 'quick_search_page.dart';
 
 const _kLeftBarWidth = 256.0;
 
@@ -49,12 +50,15 @@ class _FavoritesPageState extends State<FavoritesPage> {
 
   bool isNetwork = false;
 
+  bool showQuickSearch = false;
+
   FolderList? folderList;
 
   void setFolder(bool isNetwork, String? folder) {
     setState(() {
       this.isNetwork = isNetwork;
       this.folder = folder;
+      showQuickSearch = false;
     });
     folderList?.update();
     appdata.implicitData['favoriteFolder'] = {
@@ -141,7 +145,18 @@ class _FavoritesPageState extends State<FavoritesPage> {
     ));
   }
 
+  void setQuickSearch() {
+    setState(() {
+      showQuickSearch = true;
+      isNetwork = false;
+      folder = null;
+    });
+  }
+
   Widget buildBody() {
+    if (showQuickSearch) {
+      return _QuickSearchPage();
+    }
     if (folder == null) {
       return CustomScrollView(
         slivers: [

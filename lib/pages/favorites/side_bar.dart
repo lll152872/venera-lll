@@ -95,7 +95,7 @@ class _LeftBarState extends State<_LeftBar> implements FolderList {
               padding: widget.withAppbar
                   ? EdgeInsets.zero
                   : EdgeInsets.only(top: context.padding.top),
-              itemCount: folders.length + networkFolders.length + 3 + _quickSearchCount(),
+              itemCount: folders.length + networkFolders.length + 4,
               itemBuilder: (context, index) {
                 if (index == 0) {
                   return buildLocalTitle();
@@ -118,10 +118,9 @@ class _LeftBarState extends State<_LeftBar> implements FolderList {
                 }
                 index -= networkFolders.length;
                 if (index == 0) {
-                  return buildQuickSearchTitle();
+                  return buildQuickSearchFolder();
                 }
-                index--;
-                return buildQuickSearchEntry(index);
+                return const SizedBox();
               },
             ),
           )
@@ -316,93 +315,50 @@ class _LeftBarState extends State<_LeftBar> implements FolderList {
     });
   }
 
-  int _quickSearchCount() {
-    var entries = QuickSearchManager().entries;
-    return entries.isEmpty ? 0 : entries.length + 1; // +1 for title
-  }
-
-  Widget buildQuickSearchTitle() {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 12),
-      margin: const EdgeInsets.only(top: 8),
-      decoration: BoxDecoration(
-        border: Border(
-          top: BorderSide(
-            color: context.colorScheme.outlineVariant,
-            width: 0.6,
-          ),
-        ),
-      ),
-      child: Row(
-        children: [
-          Icon(
-            Icons.search,
-            color: context.colorScheme.secondary,
-          ),
-          const SizedBox(width: 12),
-          Text("Quick Search".tl),
-        ],
-      ).paddingHorizontal(16),
-    );
-  }
-
-  Widget buildQuickSearchEntry(int index) {
-    var entries = QuickSearchManager().entries;
-    if (index < 0 || index >= entries.length) {
-      return const SizedBox();
-    }
-    var entry = entries[index];
+  Widget buildQuickSearchFolder() {
+    bool isSelected = favPage.showQuickSearch;
     return InkWell(
       onTap: () {
-        context.to(() => SearchResultPage(
-          text: entry.keyword,
-          sourceKey: entry.sourceKey,
-        ));
-      },
-      onLongPress: () {
-        showDialog(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: Text("Remove".tl),
-            content: Text("Remove this quick search?".tl),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: Text("Cancel".tl),
-              ),
-              TextButton(
-                onPressed: () {
-                  QuickSearchManager().removeAt(index);
-                  Navigator.pop(context);
-                },
-                child: Text("Confirm".tl),
-              ),
-            ],
-          ),
-        );
+        if (isSelected) return;
+        favPage.setQuickSearch();
+        widget.onSelected?.call();
       },
       child: Container(
         height: 42,
         alignment: Alignment.centerLeft,
-        padding: const EdgeInsets.only(left: 32),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? context.colorScheme.primaryContainer.toOpacity(0.36)
+              : null,
+          border: Border(
+            left: BorderSide(
+              color: isSelected
+                  ? context.colorScheme.primary
+                  : Colors.transparent,
+              width: 2,
+            ),
+          ),
+        ),
+        padding: const EdgeInsets.only(left: 16),
         child: Row(
           children: [
-            Icon(Icons.search, size: 16, color: context.colorScheme.outline),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                entry.keyword,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+            Icon(Icons.search, color: context.colorScheme.secondary),
+            const SizedBox(width: 12),
+            Text("Quick Search".tl),
+            const Spacer(),
+            Container(
+              margin: const EdgeInsets.only(right: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: context.colorScheme.surfaceContainer,
+                borderRadius: BorderRadius.circular(8),
               ),
+              child: Text(QuickSearchManager().entries.length.toString()),
             ),
-            Text(
-              entry.sourceName,
-              style: ts.s12.withColor(context.colorScheme.outline),
-            ).paddingRight(12),
           ],
         ),
       ),
     );
   }
+
 }
