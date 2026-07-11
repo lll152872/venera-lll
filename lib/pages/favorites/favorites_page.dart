@@ -50,15 +50,12 @@ class _FavoritesPageState extends State<FavoritesPage> {
 
   bool isNetwork = false;
 
-  bool showQuickSearch = false;
-
   FolderList? folderList;
 
   void setFolder(bool isNetwork, String? folder) {
     setState(() {
       this.isNetwork = isNetwork;
       this.folder = folder;
-      showQuickSearch = false;
     });
     folderList?.update();
     appdata.implicitData['favoriteFolder'] = {
@@ -145,16 +142,8 @@ class _FavoritesPageState extends State<FavoritesPage> {
     ));
   }
 
-  void setQuickSearch() {
-    setState(() {
-      showQuickSearch = true;
-      isNetwork = false;
-      folder = null;
-    });
-  }
-
   Widget buildBody() {
-    if (showQuickSearch) {
+    if (folder == _quickSearchFolderLabel) {
       return _QuickSearchPage();
     }
     if (folder == null) {

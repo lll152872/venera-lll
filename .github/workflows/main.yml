@@ -2,8 +2,6 @@ name: Build ALL
 run-name: Build ALL
 on:
   workflow_dispatch: {}
-  release:
-    types: [published]
 
 jobs:
   Build_MacOS:

@@ -43,7 +43,6 @@ class _LeftBarState extends State<_LeftBar> implements FolderList {
     findNetworkFolders();
     appdata.settings.addListener(updateFolders);
     LocalFavoritesManager().addListener(updateFolders);
-    QuickSearchManager().addListener(updateQuickSearch);
     super.initState();
   }
 
@@ -52,12 +51,15 @@ class _LeftBarState extends State<_LeftBar> implements FolderList {
     super.dispose();
     appdata.settings.removeListener(updateFolders);
     LocalFavoritesManager().removeListener(updateFolders);
-    QuickSearchManager().removeListener(updateQuickSearch);
   }
 
-  void updateQuickSearch() {
+  @override
+  void updateFolders() {
     if (!mounted) return;
-    setState(() {});
+    setState(() {
+      folders = LocalFavoritesManager().folderNames;
+      findNetworkFolders();
+    });
   }
 
   @override
@@ -110,15 +112,15 @@ class _LeftBarState extends State<_LeftBar> implements FolderList {
                 }
                 index -= folders.length;
                 if (index == 0) {
+                  return buildQuickSearchFolder();
+                }
+                index--;
+                if (index == 0) {
                   return buildNetworkTitle();
                 }
                 index--;
                 if (index < networkFolders.length) {
                   return buildNetworkFolder(networkFolders[index]);
-                }
-                index -= networkFolders.length;
-                if (index == 0) {
-                  return buildQuickSearchFolder();
                 }
                 return const SizedBox();
               },
@@ -306,21 +308,12 @@ class _LeftBarState extends State<_LeftBar> implements FolderList {
     setState(() {});
   }
 
-  @override
-  void updateFolders() {
-    if (!mounted) return;
-    setState(() {
-      folders = LocalFavoritesManager().folderNames;
-      findNetworkFolders();
-    });
-  }
-
   Widget buildQuickSearchFolder() {
-    bool isSelected = favPage.showQuickSearch;
+    bool isSelected = favPage.folder == _quickSearchFolderLabel && !favPage.isNetwork;
     return InkWell(
       onTap: () {
         if (isSelected) return;
-        favPage.setQuickSearch();
+        favPage.setFolder(false, _quickSearchFolderLabel);
         widget.onSelected?.call();
       },
       child: Container(
