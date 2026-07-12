@@ -439,7 +439,12 @@
     "Clear specific reader settings for this device": "清除该设备的特殊阅读设置",
     "Enable device specific settings": "启用此设备特定设置",
     "Ignore Certificate Errors": "忽略证书错误",
-    "Mouse scroll speed": "鼠标滚动速度"
+    "Mouse scroll speed": "鼠标滚动速度",
+    "Quick Search": "快捷搜索",
+    "Hide from History": "从历史中隐藏",
+    "Comics from this source will not appear in history": "此来源的漫画不会出现在历史中",
+    "Remove Quick Search": "删除快捷搜索",
+    "Save as Quick Search": "保存为快捷搜索"
   },
   "zh_TW": {
     "Home": "首頁",

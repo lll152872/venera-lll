@@ -387,9 +387,18 @@ class _LocalFavoritesPageState extends State<_LocalFavoritesPage> {
                   },
                 ),
               ),
-              if (!isAllFolder)
-                MenuButton(
-                  entries: [
+              MenuButton(
+                entries: [
+                  MenuEntry(
+                    icon: Icons.check_box,
+                    text: "Multi Select".tl,
+                    onClick: () {
+                      setState(() {
+                        multiSelectMode = true;
+                      });
+                    },
+                  ),
+                  if (!isAllFolder)
                     MenuEntry(
                       icon: Icons.edit_outlined,
                       text: "Rename".tl,
@@ -724,38 +733,60 @@ class _LocalFavoritesPageState extends State<_LocalFavoritesPage> {
               }
             },
             onLongPressed: (c, heroID) {
-              setState(() {
-                if (!multiSelectMode) {
-                  multiSelectMode = true;
-                  if (!selectedComics.containsKey(c as FavoriteItem)) {
-                    selectedComics[c] = true;
-                  }
-                  lastSelectedIndex = comics.indexOf(c);
-                } else {
-                  if (lastSelectedIndex != null) {
-                    int start = lastSelectedIndex!;
-                    int end = comics.indexOf(c as FavoriteItem);
-                    if (start > end) {
-                      int temp = start;
-                      start = end;
-                      end = temp;
-                    }
-
-                    for (int i = start; i <= end; i++) {
-                      if (i == lastSelectedIndex) continue;
-
-                      var comic = comics[i];
-                      if (selectedComics.containsKey(comic)) {
-                        selectedComics.remove(comic);
-                      } else {
-                        selectedComics[comic] = true;
-                      }
-                    }
-                  }
-                  lastSelectedIndex = comics.indexOf(c as FavoriteItem);
-                }
-                _checkExitSelectMode();
-              });
+              showMenu(
+                context: context,
+                position: RelativeRect.fromLTRB(
+                  MediaQuery.of(context).size.width / 2 - 80,
+                  MediaQuery.of(context).size.height / 2 - 40,
+                  MediaQuery.of(context).size.width / 2 + 80,
+                  MediaQuery.of(context).size.height / 2 + 40,
+                ),
+                items: [
+                  PopupMenuItem(
+                    child: ListTile(
+                      leading: Icon(Icons.info_outline),
+                      title: Text("View Detail".tl),
+                    ),
+                    onTap: () {
+                      App.mainNavigatorKey?.currentContext?.to(
+                        () => ComicPage(
+                          id: c.id,
+                          sourceKey: c.sourceKey,
+                          cover: c.cover,
+                          title: c.title,
+                          heroID: heroID,
+                        ),
+                      );
+                    },
+                  ),
+                  PopupMenuItem(
+                    child: ListTile(
+                      leading: Icon(Icons.delete, color: context.colorScheme.error),
+                      title: Text("Delete".tl,
+                          style: TextStyle(color: context.colorScheme.error)),
+                    ),
+                    onTap: () {
+                      showConfirmDialog(
+                        context: context,
+                        title: "Delete".tl,
+                        content: "Delete '@t' ?".tlParams({"t": c.title}),
+                        btnColor: context.colorScheme.error,
+                        onConfirm: () {
+                          if (!isAllFolder) {
+                            LocalFavoritesManager().deleteComicWithId(
+                              widget.folder,
+                              c.id,
+                              (c as FavoriteItem).type,
+                            );
+                          } else {
+                            LocalFavoritesManager().deleteComicWithId(widget.folder, c.id, (c as FavoriteItem).type);
+                          }
+                        },
+                      );
+                    },
+                  ),
+                ],
+              );
             },
           ),
       ],
