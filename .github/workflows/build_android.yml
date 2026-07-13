@@ -42,12 +42,7 @@ jobs:
       - name: Decode keystore
         run: |
           mkdir -p android/app
-          echo "${{ secrets.ANDROID_KEYSTORE }}" | base64 -d > android/app/keystore_orig
-          # Fix: openssl converts keystore to JDK-compatible PKCS12
-          openssl pkcs12 -in android/app/keystore_orig -passin pass:"${{ secrets.KEYSTORE_PASSWORD }}" -passout pass:temp123 -nodes -nocerts -out /tmp/key.pem
-          openssl pkcs12 -in android/app/keystore_orig -passin pass:"${{ secrets.KEYSTORE_PASSWORD }}" -nokeys -clcerts -out /tmp/cert.pem
-          openssl pkcs12 -export -in /tmp/cert.pem -inkey /tmp/key.pem -out android/app/keystore.jks -passout pass:"${{ secrets.KEYSTORE_PASSWORD }}" -name "${{ secrets.KEY_ALIAS }}"
-          rm -f /tmp/key.pem /tmp/cert.pem
+          echo "${{ secrets.ANDROID_KEYSTORE }}" | base64 -d > android/app/keystore.jks
           echo "storeFile=keystore.jks" > android/key.properties
           echo "storePassword=${{ secrets.KEYSTORE_PASSWORD }}" >> android/key.properties
           echo "keyAlias=${{ secrets.KEY_ALIAS }}" >> android/key.properties
