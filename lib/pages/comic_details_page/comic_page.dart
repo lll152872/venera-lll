@@ -781,6 +781,13 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
                 buildTag(text: formatTime(comic.updateTime!)),
               ],
             ),
+          if (comic.chapters != null && comic.chapters!.length > 0)
+            buildWrap(
+              children: [
+                buildTag(text: 'Latest Chapter'.tl, isTitle: true),
+                buildTag(text: comic.chapters!.titles.last),
+              ],
+            ),
           if (comic.maxPage != null)
             buildWrap(
               children: [
