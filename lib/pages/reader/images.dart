@@ -654,6 +654,128 @@ const Set<PointerDeviceKind> _kTouchLikeDeviceTypes = <PointerDeviceKind>{
 
 const double _kChangeChapterOffset = 160;
 
+/// Manages the cross-chapter seamless scrolling data model.
+///
+/// Holds the spliced image list and chapter offset/length metadata.
+/// _ContinuousModeState delegates all data access here, keeping UI logic
+/// separate from chapter splicing logic.
+class SplicedChapters {
+  List<String> images = [];
+  List<int> _offsets = [];
+  List<int> _chapNums = [];
+  List<int> _chapLens = [];
+
+  bool appendingNext = false;
+  bool prependingPrev = false;
+  bool allNextLoaded = false;
+  bool allPrevLoaded = false;
+
+  static const int kPreloadAhead = 10;
+  static const int kMaxChaptersInMemory = 10;
+
+  int get length => images.length;
+  int get chapterCount => _chapNums.length;
+
+  String operator [](int index) => images[index];
+
+  void reset(List<String> initialImages, int chapterNum) {
+    images = List.from(initialImages);
+    _offsets = [0];
+    _chapNums = [chapterNum];
+    _chapLens = [initialImages.length];
+    appendingNext = false;
+    prependingPrev = false;
+    allNextLoaded = false;
+    allPrevLoaded = false;
+  }
+
+  /// Returns (chapterNum, localPage, chapterLen) for the given global page.
+  (int chapter, int localPage, int len) chapterOfPage(int gp) {
+    for (int i = _offsets.length - 1; i >= 0; i--) {
+      if (gp > _offsets[i]) {
+        return (_chapNums[i], gp - _offsets[i], _chapLens[i]);
+      }
+    }
+    return (_chapNums[0], gp, _chapLens[0]);
+  }
+
+  /// Returns the image sublist for a given chapter number.
+  List<String> imagesForChapter(int chapterNum) {
+    int idx = _chapNums.indexOf(chapterNum);
+    if (idx < 0) return [];
+    int start = _offsets[idx];
+    return images.sublist(start, start + _chapLens[idx]);
+  }
+
+  /// Appends the next chapter's images to the end of the spliced list.
+  /// Returns the number of images added, or 0 if none.
+  int append(List<String> imgs, int chapterNum) {
+    _offsets.add(images.length);
+    _chapNums.add(chapterNum);
+    _chapLens.add(imgs.length);
+    images.addAll(imgs);
+    return imgs.length;
+  }
+
+  /// Prepends the previous chapter's images to the start of the spliced list.
+  /// Returns the offset adjustment (number of images prepended) so the caller
+  /// can fix scroll position.
+  int prepend(List<String> imgs, int chapterNum) {
+    int plen = imgs.length;
+    images.insertAll(0, imgs);
+    for (int i = 0; i < _offsets.length; i++) {
+      _offsets[i] += plen;
+    }
+    _offsets.insert(0, 0);
+    _chapNums.insert(0, chapterNum);
+    _chapLens.insert(0, plen);
+    return plen;
+  }
+
+  /// Unloads excess chapters from the front, keeping at most
+  /// [kMaxChaptersInMemory] chapters in memory.
+  /// Returns the number of images removed from the front.
+  int unloadExcess() {
+    if (_offsets.length <= kMaxChaptersInMemory) return 0;
+    int totalRemoved = 0;
+    while (_offsets.length > kMaxChaptersInMemory) {
+      int removeCount = _chapLens[0];
+      images.removeRange(0, removeCount);
+      _offsets.removeAt(0);
+      _chapNums.removeAt(0);
+      _chapLens.removeAt(0);
+      for (int i = 0; i < _offsets.length; i++) {
+        _offsets[i] -= removeCount;
+      }
+      totalRemoved += removeCount;
+    }
+    return totalRemoved;
+  }
+
+  /// Whether the spliced list should try appending the next chapter.
+  bool shouldAppendNext(int currentGp) {
+    return !appendingNext &&
+        !allNextLoaded &&
+        images.length - currentGp <= kPreloadAhead;
+  }
+
+  /// Whether the spliced list should try prepending the previous chapter.
+  bool shouldPrependPrev(int currentGp, bool suppressed) {
+    return !suppressed &&
+        !prependingPrev &&
+        !allPrevLoaded &&
+        currentGp <= kPreloadAhead + 1;
+  }
+
+  void markAppending(bool v) => appendingNext = v;
+  void markPrepending(bool v) => prependingPrev = v;
+  void markAllNextLoaded() => allNextLoaded = true;
+  void markAllPrevLoaded() => allPrevLoaded = true;
+
+  int get lastChapterNum => _chapNums.last;
+  int get firstChapterNum => _chapNums.first;
+}
+
 class _ContinuousMode extends StatefulWidget {
   const _ContinuousMode({super.key});
 
@@ -688,15 +810,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
   bool isLongPressing = false;
 
   /// ── Cross-chapter seamless scrolling data ──
-  List<String> _allImages = [];
-  List<int> _chapterOffsets = [];
-  List<int> _chapterNums = [];
-  List<int> _chapterLens = [];
-  bool _appendingNext = false;
-  bool _prependingPrev = false;
-  bool _allNextLoaded = false;
-  bool _allPrevLoaded = false;
-  static const int _kPreloadAhead = 10;
+  late final SplicedChapters _spliced = SplicedChapters();
 
   /// ── Download concurrency limiter ──
   /// Prevents launching too many parallel image downloads at once.
@@ -727,34 +841,8 @@ class _ContinuousModeState extends State<_ContinuousMode>
   bool _scrollingForward = true;
 
   /// ── Chapter memory unloading ──
-  /// Keep at most _kMaxChaptersInMemory chapters in _allImages.
-  /// When exceeded, remove oldest chapters' URLs from the front.
-  /// _chapterOffsets/Nums/Lens are preserved for re-fetch on scroll-back.
-  static const int _kMaxChaptersInMemory = 10;
-
-  /// Unload excess old chapters from the front of _allImages when chapter
-  /// count exceeds _kMaxChaptersInMemory.
-  void _unloadExcessChapters() {
-    if (_chapterOffsets.length <= _kMaxChaptersInMemory) return;
-    setState(() {
-      while (_chapterOffsets.length > _kMaxChaptersInMemory) {
-        // Remove oldest chapter (index 0)
-        int removeCount = _chapterLens[0];
-        _allImages.removeRange(0, removeCount);
-        _chapterOffsets.removeAt(0);
-        _chapterNums.removeAt(0);
-        _chapterLens.removeAt(0);
-        // Adjust remaining offsets
-        for (int i = 0; i < _chapterOffsets.length; i++) {
-          _chapterOffsets[i] -= removeCount;
-        }
-        // Clear cached markers for removed range
-        if (cached.length > removeCount) {
-          cached.removeRange(0, removeCount);
-        }
-      }
-    });
-  }
+  /// Delegated to SplicedChapters.unloadExcess().
+  /// cached[] markers for removed range are cleaned up here.
 
   bool prepareToPrevChapter = false;
   bool prepareToNextChapter = false;
@@ -774,34 +862,14 @@ class _ContinuousModeState extends State<_ContinuousMode>
   }
 
   void _resetSplicedState() {
-    _allImages = List.from(reader.images!);
-    _chapterOffsets = [0];
-    _chapterNums = [reader.chapter];
-    _chapterLens = [reader.images!.length];
-    _appendingNext = false;
-    _prependingPrev = false;
-    _allNextLoaded = false;
-    _allPrevLoaded = false;
-  }
-
-  (int, int, int) _chapterOfPage(int gp) {
-    for (int i = _chapterOffsets.length - 1; i >= 0; i--) {
-      if (gp > _chapterOffsets[i]) {
-        return (_chapterNums[i], gp - _chapterOffsets[i], _chapterLens[i]);
-      }
-    }
-    return (_chapterNums[0], gp, _chapterLens[0]);
+    _spliced.reset(reader.images!, reader.chapter);
   }
 
   void _updateReaderStateForSpliced(int globalPage) {
-    var (int chap, int localPage, _) = _chapterOfPage(globalPage);
+    var (int chap, int localPage, _) = _spliced.chapterOfPage(globalPage);
     if (reader.chapter != chap) {
       reader.chapter = chap;
-      int idx = _chapterNums.indexOf(chap);
-      if (idx >= 0 && idx < _chapterLens.length) {
-        int start = _chapterOffsets[idx];
-        reader.images = _allImages.sublist(start, start + _chapterLens[idx]);
-      }
+      reader.images = _spliced.imagesForChapter(chap);
     }
     if (reader.page != localPage) {
       reader.setPage(localPage);
@@ -810,71 +878,72 @@ class _ContinuousModeState extends State<_ContinuousMode>
   }
 
   String _eidForPage(int globalPage) {
-    for (int i = _chapterOffsets.length - 1; i >= 0; i--) {
-      if (globalPage > _chapterOffsets[i]) {
-        return reader.widget.chapters?.ids
-                .elementAtOrNull(_chapterNums[i] - 1) ??
-            '0';
-      }
-    }
+    int chapNum = _spliced.chapterOfPage(globalPage).$1;
     return reader.widget.chapters?.ids
-            .elementAtOrNull(_chapterNums[0] - 1) ??
+            .elementAtOrNull(chapNum - 1) ??
         '0';
   }
 
   Future<void> _appendNextChapter() async {
-    if (_appendingNext || _allNextLoaded || !mounted) return;
-    if (_chapterNums.last >= reader.maxChapter) {
-      _allNextLoaded = true;
+    if (_spliced.appendingNext || _spliced.allNextLoaded || !mounted) return;
+    if (_spliced.lastChapterNum >= reader.maxChapter) {
+      _spliced.markAllNextLoaded();
       return;
     }
-    _appendingNext = true;
-    int nextCh = _chapterNums.last + 1;
+    _spliced.markAppending(true);
+    int nextCh = _spliced.lastChapterNum + 1;
     String eid = reader.widget.chapters?.ids.elementAtOrNull(nextCh - 1) ?? '';
-    if (eid.isEmpty) { _appendingNext = false; _allNextLoaded = true; return; }
+    if (eid.isEmpty) {
+      _spliced.markAppending(false);
+      _spliced.markAllNextLoaded();
+      return;
+    }
     var res = await reader.type.comicSource!.loadComicPages!(reader.cid, eid);
     if (!mounted) return;
-    if (res.error) { _appendingNext = false; return; }
-    var imgs = res.data;
+    if (res.error) {
+      _spliced.markAppending(false);
+      return;
+    }
     setState(() {
-      _chapterOffsets.add(_allImages.length);
-      _chapterNums.add(nextCh);
-      _chapterLens.add(imgs.length);
-      _allImages.addAll(imgs);
-      _appendingNext = false;
+      _spliced.append(res.data, nextCh);
+      _spliced.markAppending(false);
     });
-    _growCache(_allImages.length + 16);
-    _unloadExcessChapters();
+    _growCache(_spliced.length + 16);
+    var removed = _spliced.unloadExcess();
+    if (removed > 0 && cached.length > removed) {
+      cached.removeRange(0, removed);
+    }
   }
 
   Future<void> _prependPrevChapter() async {
-    if (_prependingPrev || _allPrevLoaded || !mounted) return;
-    if (_chapterNums.first <= 1) { _allPrevLoaded = true; return; }
-    _prependingPrev = true;
-    int prevCh = _chapterNums.first - 1;
+    if (_spliced.prependingPrev || _spliced.allPrevLoaded || !mounted) return;
+    if (_spliced.firstChapterNum <= 1) {
+      _spliced.markAllPrevLoaded();
+      return;
+    }
+    _spliced.markPrepending(true);
+    int prevCh = _spliced.firstChapterNum - 1;
     String eid = reader.widget.chapters?.ids.elementAtOrNull(prevCh - 1) ?? '';
-    if (eid.isEmpty) { _prependingPrev = false; _allPrevLoaded = true; return; }
+    if (eid.isEmpty) {
+      _spliced.markPrepending(false);
+      _spliced.markAllPrevLoaded();
+      return;
+    }
     var res = await reader.type.comicSource!.loadComicPages!(reader.cid, eid);
     if (!mounted) return;
-    if (res.error) { _prependingPrev = false; return; }
-    var imgs = res.data;
-    int curFirstOff = _chapterOffsets[0];
-    int plen = imgs.length;
+    if (res.error) {
+      _spliced.markPrepending(false);
+      return;
+    }
+    int plen = _spliced.prepend(res.data, prevCh);
     setState(() {
-      _allImages.insertAll(0, imgs);
-      for (int i = 0; i < _chapterOffsets.length; i++) {
-        _chapterOffsets[i] += plen;
-      }
-      _chapterOffsets.insert(0, 0);
-      _chapterNums.insert(0, prevCh);
-      _chapterLens.insert(0, plen);
-      _prependingPrev = false;
+      _spliced.markPrepending(false);
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) itemScrollController.jumpTo(index: curFirstOff + plen);
+      if (mounted) itemScrollController.jumpTo(index: plen);
     });
-    _growCache(_allImages.length + 16);
-    _unloadExcessChapters();
+    _growCache(_spliced.length + 16);
+    _spliced.unloadExcess();
   }
 
   void _growCache(int minSize) {
@@ -896,7 +965,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
     reader._imageViewController = this;
     itemPositionsListener.itemPositions.addListener(onPositionChanged);
     _resetSplicedState();
-    _cachedSize = _allImages.length + 16;
+    _cachedSize = _spliced.length + 16;
     cached = List.filled(_cachedSize, false);
     // Suppress prepend on fresh init (covers chapter jump via toChapter)
     _suppressPrepend = true;
@@ -921,7 +990,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
     // and reset spliced state to avoid showing stale images from previous chapter
     if (reader.chapter != _lastKnownChapter) {
       _resetSplicedState();
-      _cachedSize = _allImages.length + 16;
+      _cachedSize = _spliced.length + 16;
       cached = List.filled(_cachedSize, false);
       _lastKnownChapter = reader.chapter;
       // Suppress prepend after chapter jump
@@ -933,11 +1002,10 @@ class _ContinuousModeState extends State<_ContinuousMode>
   void onPositionChanged() {
     if (itemPositionsListener.itemPositions.value.isEmpty) return;
     int gp = itemPositionsListener.itemPositions.value.first.index;
-    gp = gp.clamp(1, _allImages.length);
+    gp = gp.clamp(1, _spliced.length);
     _updateReaderStateForSpliced(gp);
     _cacheSplicedImages(gp);
-    if (_allImages.length - gp <= _kPreloadAhead &&
-        !_appendingNext && !_allNextLoaded) {
+    if (_spliced.shouldAppendNext(gp)) {
       _appendNextChapter();
     }
     // Detect user scrolling up: if gp decreased since last check, mark user intent
@@ -952,9 +1020,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
       }
       _lastScrollPos = gp.toDouble();
     }
-    if (!_suppressPrepend &&
-        gp <= _kPreloadAhead + 1 &&
-        !_prependingPrev && !_allPrevLoaded) {
+    if (_spliced.shouldPrependPrev(gp, _suppressPrepend)) {
       _prependPrevChapter();
     }
   }
@@ -991,10 +1057,10 @@ class _ContinuousModeState extends State<_ContinuousMode>
     }
 
     for (int i in pagesToLoad) {
-      if (i > _allImages.length || i < 1) continue;
+      if (i > _spliced.length || i < 1) continue;
       if (i < cached.length && cached[i]) continue;
       if (i >= cached.length) continue;
-      var key = _allImages[i - 1];
+      var key = _spliced[i - 1];
       if (key.startsWith("file://")) { cached[i] = true; continue; }
       _enqueueDownload(() {
         ImageDownloader.loadComicImage(
@@ -1095,7 +1161,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
   @override
   Widget build(BuildContext context) {
     Widget widget = ScrollablePositionedList.builder(
-      initialScrollIndex: reader.page.clamp(1, _allImages.length),
+      initialScrollIndex: reader.page.clamp(1, _spliced.length),
       itemScrollController: itemScrollController,
       itemPositionsListener: itemPositionsListener,
       scrollControllerCallback: (scrollController) {
@@ -1105,7 +1171,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
         _scrollController = scrollController;
         _scrollController!.addListener(onScroll);
       },
-      itemCount: _allImages.length + 2,
+      itemCount: _spliced.length + 2,
       addSemanticIndexes: false,
       scrollDirection: reader.mode == ReaderMode.continuousTopToBottom
           ? Axis.vertical
@@ -1117,7 +1183,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
           ? const ClampingScrollPhysics()
           : const BouncingScrollPhysics(),
       itemBuilder: (context, index) {
-        if (index == 0 || index == _allImages.length + 1) {
+        if (index == 0 || index == _spliced.length + 1) {
           return const SizedBox();
         }
         double? width, height;
@@ -1129,7 +1195,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
         }
 
         int imageIndex = index - 1;
-        String imageKey = _allImages[imageIndex];
+        String imageKey = _spliced[imageIndex];
         String eid = _eidForPage(index);
 
         ImageProvider image = ReaderImageProvider(
@@ -1255,14 +1321,14 @@ class _ContinuousModeState extends State<_ContinuousMode>
           if (!scrollController.hasClients) return false;
           if (scrollController.position.pixels >=
                   scrollController.position.maxScrollExtent) {
-            if (!_allNextLoaded && !_appendingNext) {
+            if (!_spliced.allNextLoaded && !_spliced.appendingNext) {
               _appendNextChapter();
             }
           } else if (scrollController.position.pixels <=
                   scrollController.position.minScrollExtent) {
-            if (!_allPrevLoaded && !_prependingPrev) {
+            if (!_spliced.allPrevLoaded && !_spliced.prependingPrev) {
               _prependPrevChapter();
-            } else if (_allPrevLoaded && !reader.isFirstChapterOfGroup) {
+            } else if (_spliced.allPrevLoaded && !reader.isFirstChapterOfGroup) {
               if (!prepareToPrevChapter) {
                 jumpToPrevChapter = true;
                 jumpToNextChapter = false;

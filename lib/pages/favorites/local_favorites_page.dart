@@ -47,12 +47,17 @@ class _LocalFavoritesPageState extends State<_LocalFavoritesPage> {
 
   late String readFilterSelect;
 
+  /// Sort type for local favorites: 'default', 'name', 'time_desc', 'time_asc'
+  late String sortType;
+
+  static const sortTypeList = ['default', 'name', 'time_desc', 'time_asc'];
+
   var searchResults = <FavoriteItem>[];
 
   void updateSearchResult() {
     setState(() {
       if (keyword.trim().isEmpty) {
-        searchResults = comics;
+        searchResults = sortComics(List.from(comics));
       } else {
         searchResults = [];
         for (var comic in comics) {
@@ -62,6 +67,7 @@ class _LocalFavoritesPageState extends State<_LocalFavoritesPage> {
             searchResults.add(comic);
           }
         }
+        sortComics(searchResults);
       }
     });
   }
@@ -109,7 +115,7 @@ class _LocalFavoritesPageState extends State<_LocalFavoritesPage> {
   }
 
   List<FavoriteItem> filterComics(List<FavoriteItem> curComics) {
-    return curComics.where((comic) {
+    var filtered = curComics.where((comic) {
       var history =
           HistoryManager().find(comic.id, ComicType(comic.sourceKey.hashCode));
       if (readFilterSelect == "UnCompleted") {
@@ -119,6 +125,23 @@ class _LocalFavoritesPageState extends State<_LocalFavoritesPage> {
       }
       return true;
     }).toList();
+    return sortComics(filtered);
+  }
+
+  List<FavoriteItem> sortComics(List<FavoriteItem> list) {
+    switch (sortType) {
+      case 'name':
+        list.sort((a, b) => a.name.compareTo(b.name));
+        break;
+      case 'time_desc':
+        list.sort((a, b) => b.time.compareTo(a.time));
+        break;
+      case 'time_asc':
+        list.sort((a, b) => a.time.compareTo(b.time));
+        break;
+      // 'default': keep display_order from DB
+    }
+    return list;
   }
 
   bool matchKeyword(String keyword, FavoriteItem comic) {
@@ -181,6 +204,8 @@ class _LocalFavoritesPageState extends State<_LocalFavoritesPage> {
   void initState() {
     readFilterSelect = appdata.implicitData["local_favorites_read_filter"] ??
         readFilterList[0];
+    sortType = appdata.implicitData["local_favorites_sort_type"] ??
+        sortTypeList[0];
     favPage = context.findAncestorStateOfType<_FavoritesPageState>()!;
     if (!isAllFolder) {
       var (a, b) = LocalFavoritesManager().findLinked(widget.folder);
@@ -353,7 +378,8 @@ class _LocalFavoritesPageState extends State<_LocalFavoritesPage> {
                 message: "Filter".tl,
                 child: IconButton(
                   icon: const Icon(Icons.sort_rounded),
-                  color: readFilterSelect != readFilterList[0]
+                  color: (readFilterSelect != readFilterList[0] ||
+                          sortType != sortTypeList[0])
                       ? context.colorScheme.primaryContainer
                       : null,
                   onPressed: () {
@@ -362,9 +388,11 @@ class _LocalFavoritesPageState extends State<_LocalFavoritesPage> {
                       builder: (context) {
                         return _LocalFavoritesFilterDialog(
                           initReadFilterSelect: readFilterSelect,
-                          updateConfig: (readFilter) {
+                          initSortType: sortType,
+                          updateConfig: (readFilter, newSortType) {
                             setState(() {
                               readFilterSelect = readFilter;
+                              sortType = newSortType;
                             });
                             updateComics();
                           },
@@ -1183,10 +1211,12 @@ class _SelectUpdatePageNumState extends State<_SelectUpdatePageNum> {
 class _LocalFavoritesFilterDialog extends StatefulWidget {
   const _LocalFavoritesFilterDialog({
     required this.initReadFilterSelect,
+    required this.initSortType,
     required this.updateConfig,
   });
 
   final String initReadFilterSelect;
+  final String initSortType;
   final Function updateConfig;
 
   @override
@@ -1196,10 +1226,24 @@ class _LocalFavoritesFilterDialog extends StatefulWidget {
 
 const readFilterList = ['All', 'UnCompleted', 'Completed'];
 
+String sortTypeLabel(String type) {
+  switch (type) {
+    case 'name':
+      return 'Name';
+    case 'time_desc':
+      return 'Newest first';
+    case 'time_asc':
+      return 'Oldest first';
+    default:
+      return 'Default';
+  }
+}
+
 class _LocalFavoritesFilterDialogState
     extends State<_LocalFavoritesFilterDialog> {
   List<String> optionTypes = ['Filter'];
   late var readFilter = widget.initReadFilterSelect;
+  late var sortType = widget.initSortType;
   @override
   Widget build(BuildContext context) {
     Widget tabBar = Material(
@@ -1231,7 +1275,21 @@ class _LocalFavoritesFilterDialogState
                         });
                       },
                     ),
-                  )
+                  ),
+                  ListTile(
+                    title: Text("Sort by".tl),
+                    trailing: Select(
+                      current: sortTypeLabel(sortType).tl,
+                      values: _LocalFavoritesPageState.sortTypeList
+                          .map((e) => sortTypeLabel(e).tl).toList(),
+                      minWidth: 64,
+                      onTap: (index) {
+                        setState(() {
+                          sortType = _LocalFavoritesPageState.sortTypeList[index];
+                        });
+                      },
+                    ),
+                  ),
                 ],
               )
             ]),
@@ -1242,10 +1300,11 @@ class _LocalFavoritesFilterDialogState
         FilledButton(
           onPressed: () {
             appdata.implicitData["local_favorites_read_filter"] = readFilter;
+            appdata.implicitData["local_favorites_sort_type"] = sortType;
             appdata.writeImplicitData();
             if (mounted) {
               Navigator.pop(context);
-              widget.updateConfig(readFilter);
+              widget.updateConfig(readFilter, sortType);
             }
           },
           child: Text("Confirm".tl),

@@ -445,7 +445,11 @@
     "Hide from History": "从历史中隐藏",
     "Comics from this source will not appear in history": "此来源的漫画不会出现在历史中",
     "Remove Quick Search": "删除快捷搜索",
-    "Save as Quick Search": "保存为快捷搜索"
+    "Save as Quick Search": "保存为快捷搜索",
+    "Sort by": "排序方式",
+    "Default": "默认",
+    "Newest first": "最新优先",
+    "Oldest first": "最早优先"
   },
   "zh_TW": {
     "Home": "首頁",
@@ -890,6 +894,10 @@
     "Ignore Certificate Errors": "忽略證書錯誤",
     "Mouse scroll speed": "滑鼠滾動速度",
     "Hide from History": "在历史中隐藏",
-    "Comics from this source will not appear in history": "该漫画源的漫画将不显示在历史记录中"
+    "Comics from this source will not appear in history": "该漫画源的漫画将不显示在历史记录中",
+    "Sort by": "排序方式",
+    "Default": "預設",
+    "Newest first": "最新優先",
+    "Oldest first": "最早優先"
   }
 }
