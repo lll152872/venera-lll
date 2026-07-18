@@ -4,7 +4,7 @@ class ManWaBa extends ComicSource {
   key = 'manwaba';
   version = '1.1.0';
   minAppVersion = '1.4.0';
-  url = 'https://cdn.jsdelivr.net/gh/lll152872/venera@master/assets/sources/manwaba.js';
+  url = 'https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/assets/sources/manwaba.js';
   // 修复①：原 mwuu.cc 已失效，实际可用域名为 manwapi.cc
   api = 'https://manwapi.cc/api';
   // 图片 AES-CBC 解密密钥（从 manwaba.com base.js 提取）
