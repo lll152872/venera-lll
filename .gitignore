@@ -50,3 +50,9 @@ add_translation.py
 build_output/
 ci_log.txt
 pubspec.lock.bak
+
+# 本地编译/测试/构建产出（不提交）
+testlog/
+windows/sqlite3-src/
+apk-output/
+android/build/
