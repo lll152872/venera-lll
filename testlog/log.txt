@@ -1,0 +1,158 @@
+Logs
+
+error init 2026-06-14 14:06:17.757499 
+Bad state: rhttp's codegen version (2.11.1) should be the same as runtime version (2.12.0). See https://cjycode.com/flutter_rust_bridge/guides/miscellaneous/upgrade/regular for details.
+#0      BaseEntrypoint._sanityCheckCodegenVersion (package:flutter_rust_bridge/src/main_components/entrypoint.dart:101)
+#1      BaseEntrypoint.initImpl (package:flutter_rust_bridge/src/main_components/entrypoint.dart:47)
+#2      RustLib.init (package:rhttp/src/rust/frb_generated.dart:32)
+#3      Rhttp.init (package:rhttp/src/rhttp.dart:16)
+#4      init (package:venera/init.dart:42)
+<asynchronous suspension>
+#5      main.<anonymous closure>.<anonymous closure> (package:venera/main.dart:29)
+<asynchronous suspension>
+
+
+info Network 2026-06-14 14:06:18.639560 
+GET https://cn.bzmgcn.com/comic/doupocangqiong-zhiyinmankerenxiang_hsvfkb
+headers:
+{User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36}
+data:
+null
+
+error Network 2026-06-14 14:06:18.644555 
+GET https://cn.bzmgcn.com/comic/doupocangqiong-zhiyinmankerenxiang_hsvfkb
+DioException [unknown]: null
+Error: Bad state: flutter_rust_bridge has not been initialized. Did you forget to call `await RustLib.init();`? (If you have configured a different lib name, change `RustLib` to your name.)
+null
+
+error Network 2026-06-14 14:06:18.644555 
+DioException [unknown]: null
+Error: Bad state: flutter_rust_bridge has not been initialized. Did you forget to call `await RustLib.init();`? (If you have configured a different lib name, change `RustLib` to your name.)
+
+
+info Network 2026-06-14 14:06:18.847051 
+GET https://cn.bzmgcn.com/comic/doupocangqiong-zhiyinmankerenxiang_hsvfkb
+headers:
+{User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36}
+data:
+null
+
+error Network 2026-06-14 14:06:18.848055 
+GET https://cn.bzmgcn.com/comic/doupocangqiong-zhiyinmankerenxiang_hsvfkb
+DioException [unknown]: null
+Error: Bad state: flutter_rust_bridge has not been initialized. Did you forget to call `await RustLib.init();`? (If you have configured a different lib name, change `RustLib` to your name.)
+null
+
+error Network 2026-06-14 14:06:18.848055 
+DioException [unknown]: null
+Error: Bad state: flutter_rust_bridge has not been initialized. Did you forget to call `await RustLib.init();`? (If you have configured a different lib name, change `RustLib` to your name.)
+
+
+info Network 2026-06-14 14:06:19.050226 
+GET https://cn.bzmgcn.com/comic/doupocangqiong-zhiyinmankerenxiang_hsvfkb
+headers:
+{User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36}
+data:
+null
+
+error Network 2026-06-14 14:06:19.050226 
+GET https://cn.bzmgcn.com/comic/doupocangqiong-zhiyinmankerenxiang_hsvfkb
+DioException [unknown]: null
+Error: Bad state: flutter_rust_bridge has not been initialized. Did you forget to call `await RustLib.init();`? (If you have configured a different lib name, change `RustLib` to your name.)
+null
+
+error Network 2026-06-14 14:06:19.050226 
+DioException [unknown]: null
+Error: Bad state: flutter_rust_bridge has not been initialized. Did you forget to call `await RustLib.init();`? (If you have configured a different lib name, change `RustLib` to your name.)
+
+
+info Network 2026-06-14 14:06:19.254608 
+GET https://cn.bzmgcn.com/comic/doupocangqiong-zhiyinmankerenxiang_hsvfkb
+headers:
+{User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36}
+data:
+null
+
+error Network 2026-06-14 14:06:19.254608 
+GET https://cn.bzmgcn.com/comic/doupocangqiong-zhiyinmankerenxiang_hsvfkb
+DioException [unknown]: null
+Error: Bad state: flutter_rust_bridge has not been initialized. Did you forget to call `await RustLib.init();`? (If you have configured a different lib name, change `RustLib` to your name.)
+null
+
+error Network 2026-06-14 14:06:19.254608 
+DioException [unknown]: null
+Error: Bad state: flutter_rust_bridge has not been initialized. Did you forget to call `await RustLib.init();`? (If you have configured a different lib name, change `RustLib` to your name.)
+
+
+info Network 2026-06-14 14:06:20.150305 
+GET https://cn.bzmgcn.com/comic/doupocangqiong-zhiyinmankerenxiang_hsvfkb
+headers:
+{User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36}
+data:
+null
+
+error Network 2026-06-14 14:06:20.152306 
+GET https://cn.bzmgcn.com/comic/doupocangqiong-zhiyinmankerenxiang_hsvfkb
+DioException [unknown]: null
+Error: Bad state: flutter_rust_bridge has not been initialized. Did you forget to call `await RustLib.init();`? (If you have configured a different lib name, change `RustLib` to your name.)
+null
+
+error Network 2026-06-14 14:06:20.152306 
+DioException [unknown]: null
+Error: Bad state: flutter_rust_bridge has not been initialized. Did you forget to call `await RustLib.init();`? (If you have configured a different lib name, change `RustLib` to your name.)
+
+
+info Network 2026-06-14 14:06:20.354471 
+GET https://cn.bzmgcn.com/comic/doupocangqiong-zhiyinmankerenxiang_hsvfkb
+headers:
+{User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36}
+data:
+null
+
+error Network 2026-06-14 14:06:20.354471 
+GET https://cn.bzmgcn.com/comic/doupocangqiong-zhiyinmankerenxiang_hsvfkb
+DioException [unknown]: null
+Error: Bad state: flutter_rust_bridge has not been initialized. Did you forget to call `await RustLib.init();`? (If you have configured a different lib name, change `RustLib` to your name.)
+null
+
+error Network 2026-06-14 14:06:20.354471 
+DioException [unknown]: null
+Error: Bad state: flutter_rust_bridge has not been initialized. Did you forget to call `await RustLib.init();`? (If you have configured a different lib name, change `RustLib` to your name.)
+
+
+info Network 2026-06-14 14:06:20.557795 
+GET https://cn.bzmgcn.com/comic/doupocangqiong-zhiyinmankerenxiang_hsvfkb
+headers:
+{User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36}
+data:
+null
+
+error Network 2026-06-14 14:06:20.557795 
+GET https://cn.bzmgcn.com/comic/doupocangqiong-zhiyinmankerenxiang_hsvfkb
+DioException [unknown]: null
+Error: Bad state: flutter_rust_bridge has not been initialized. Did you forget to call `await RustLib.init();`? (If you have configured a different lib name, change `RustLib` to your name.)
+null
+
+error Network 2026-06-14 14:06:20.557795 
+DioException [unknown]: null
+Error: Bad state: flutter_rust_bridge has not been initialized. Did you forget to call `await RustLib.init();`? (If you have configured a different lib name, change `RustLib` to your name.)
+
+
+info Network 2026-06-14 14:06:20.760906 
+GET https://cn.bzmgcn.com/comic/doupocangqiong-zhiyinmankerenxiang_hsvfkb
+headers:
+{User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36}
+data:
+null
+
+error Network 2026-06-14 14:06:20.760906 
+GET https://cn.bzmgcn.com/comic/doupocangqiong-zhiyinmankerenxiang_hsvfkb
+DioException [unknown]: null
+Error: Bad state: flutter_rust_bridge has not been initialized. Did you forget to call `await RustLib.init();`? (If you have configured a different lib name, change `RustLib` to your name.)
+null
+
+error Network 2026-06-14 14:06:20.760906 
+DioException [unknown]: null
+Error: Bad state: flutter_rust_bridge has not been initialized. Did you forget to call `await RustLib.init();`? (If you have configured a different lib name, change `RustLib` to your name.)
+
+
