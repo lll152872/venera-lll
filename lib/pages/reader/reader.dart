@@ -115,6 +115,10 @@ class _ReaderState extends State<Reader>
     setState(() {});
   }
 
+  /// Exposes widget.chapters to the _ReaderLocation mixin.
+  @override
+  ComicChapters? get chapters => widget.chapters;
+
   /// The maximum page number for images only (excluding chapter comments page).
   /// This is used for display purposes and history recording.
   @override
@@ -231,6 +235,7 @@ class _ReaderState extends State<Reader>
       LocalFavoritesManager().onRead(cid, type);
     });
     super.initState();
+    _beginLoad(chapter);
   }
 
   bool _isInitialized = false;
@@ -300,7 +305,7 @@ class _ReaderState extends State<Reader>
         children: [
           _ReaderScaffold(
             child: _ReaderGestureDetector(
-              child: const _ReaderImages(),
+              child: _ReaderImages(),
             ),
           ),
           const Overlay(initialEntries: []),
@@ -328,6 +333,7 @@ class _ReaderState extends State<Reader>
   /// `HistoryManager().addHistoryAsync` is a high-cost operation because it creates a new isolate.
   Timer? _updateHistoryTimer;
 
+  @override
   void updateHistory() {
     if (history != null) {
       // page >= maxPage handles both last image page and chapter comments page
@@ -591,15 +597,17 @@ abstract mixin class _VolumeListener {
 }
 
 abstract mixin class _ReaderLocation {
+  /// Provided by _ReaderState.
+  void updateHistory();
+
+  /// Provided by _ReaderState (delegates to widget.chapters).
+  ComicChapters? get chapters;
+
   int _page = 1;
   int? _pendingPage;
 
   /// Flag to indicate that the page should jump to the last page after images are loaded.
   bool _jumpToLastPageOnLoad = false;
-
-  /// Set by toChapter() to signal _ContinuousMode to reset its spliced state
-  /// internally on the next build, instead of recreating the whole widget.
-  bool _needsSplicedReset = false;
 
   int get page => _page;
 
@@ -609,6 +617,10 @@ abstract mixin class _ReaderLocation {
   }
 
   int chapter = 1;
+
+  /// Monotonic token to discard stale loads when the user switches chapters
+  /// rapidly (only the latest chapter's result is applied).
+  int _loadToken = 0;
 
   int get maxPage;
 
@@ -693,29 +705,71 @@ abstract mixin class _ReaderLocation {
     return chapter >= 1 && chapter <= maxChapter;
   }
 
-  /// Returns true if the chapter is changed
-  bool toNextChapter() {
-    return toChapter(chapter + 1);
+  /// Returns true if the chapter switch was requested (valid & not already loading).
+  bool toNextChapter() => changeChapter(chapter + 1);
+
+  /// Returns true if the chapter switch was requested.
+  /// If [toLastPage] is true, the page will be set to the last page of the
+  /// target chapter after its images load.
+  bool toPrevChapter({bool toLastPage = false}) =>
+      changeChapter(chapter - 1, toLastPage: toLastPage);
+
+  /// Public alias kept for compatibility; delegates to [changeChapter].
+  bool toChapter(int c, {bool toLastPage = false}) =>
+      changeChapter(c, toLastPage: toLastPage);
+
+  /// Single chapter-switch entry point (legado-style: load resolves, then the
+  /// view is notified exactly once via onChapterLoaded — no null window, no
+  /// multi-place coordination). Returns true if the switch was requested.
+  bool changeChapter(int c, {bool toLastPage = false}) {
+    if (!_validateChapter(c) || isLoading) return false;
+    chapter = c;
+    page = 1;
+    _jumpToLastPageOnLoad = toLastPage;
+    update();
+    _beginLoad(c);
+    return true;
   }
 
-  /// Returns true if the chapter is changed
-  /// If [toLastPage] is true, the page will be set to the last page of the previous chapter.
-  bool toPrevChapter({bool toLastPage = false}) {
-    return toChapter(chapter - 1, toLastPage: toLastPage);
-  }
+  String? error;
 
-  bool toChapter(int c, {bool toLastPage = false}) {
-    if (_validateChapter(c) && !isLoading) {
-      chapter = c;
-      page = 1;
-      _jumpToLastPageOnLoad = toLastPage;
-      isLoading = true;
-      images = null;
-      _needsSplicedReset = true;
+  /// Starts loading chapter [c]'s images and wires the result to the view.
+  /// Used by both changeChapter() and the initial load in initState.
+  void _beginLoad(int c) {
+    isLoading = true;
+    error = null;
+    final token = ++_loadToken;
+    _loadChapterImages(c).then((data) {
+      if (token != _loadToken) return; // stale load, discard
+      images = data;
+      if (_jumpToLastPageOnLoad) {
+        page = maxPage;
+        _jumpToLastPageOnLoad = false;
+      }
+      isLoading = false;
       update();
-      return true;
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        _imageViewController?.onChapterLoaded();
+      });
+      Future.microtask(updateHistory);
+    }).catchError((e, st) {
+      if (token != _loadToken) return;
+      error = e.toString();
+      isLoading = false;
+      update();
+    });
+  }
+
+  /// Fetches the image list for chapter [c] without mutating reader state.
+  Future<List<String>> _loadChapterImages(int c) async {
+    if (type == ComicType.local ||
+        LocalManager().isDownloaded(cid, type, c, chapters)) {
+      return LocalManager().getImages(cid, type, c);
     }
-    return false;
+    final cp = chapters?.ids.elementAtOrNull(c - 1);
+    final res = await type.comicSource!.loadComicPages!(cid, cp);
+    if (res.error) throw res.errorMessage ?? 'load error';
+    return res.data;
   }
 
   Timer? autoPageTurningTimer;
@@ -823,4 +877,9 @@ abstract interface class _ImageViewController {
   Future<Uint8List?> getImageByOffset(Offset offset);
 
   String? getImageKeyByOffset(Offset offset);
+
+  /// Called by the reader after a chapter switch's images are ready, so the
+  /// view can reset its internal state (spliced list / page controller) and
+  /// scroll to the target page. Single synchronous entry — no null window.
+  void onChapterLoaded();
 }

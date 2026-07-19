@@ -21,7 +21,6 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
   bool _showSelectOverlay = false;
 
   bool get isOpen => _isOpen;
-
   bool get isReversed =>
       context.reader.mode == ReaderMode.galleryRightToLeft ||
       context.reader.mode == ReaderMode.continuousRightToLeft;

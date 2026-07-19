@@ -39,7 +39,7 @@ class ReaderImageProvider
       }
     } else {
       await for (var event
-        in ImageDownloader.loadComicImage(imageKey, sourceKey, cid, eid)) {
+          in ImageDownloader.loadComicImage(imageKey, sourceKey, cid, eid)) {
         checkStop();
         chunkEvents.add(ImageChunkEvent(
           cumulativeBytesLoaded: event.currentBytes,

@@ -8,16 +8,11 @@ class _ReaderImages extends StatefulWidget {
 }
 
 class _ReaderImagesState extends State<_ReaderImages> {
-  String? error;
-
-  bool inProgress = false;
-
   late _ReaderState reader;
 
   @override
   void initState() {
     reader = context.reader;
-    reader.isLoading = true;
     super.initState();
   }
 
@@ -27,91 +22,20 @@ class _ReaderImagesState extends State<_ReaderImages> {
     ImageDownloader.cancelAllLoadingImages();
   }
 
-  /// Handle jumping to last page when _jumpToLastPageOnLoad is true
-  void _handleJumpToLastPage() {
-    if (reader._jumpToLastPageOnLoad) {
-      reader._page = reader.maxPage;
-      reader._jumpToLastPageOnLoad = false;
-    }
-  }
-
-  void load() async {
-    if (inProgress) return;
-    inProgress = true;
-    if (reader.type == ComicType.local ||
-        (LocalManager().isDownloaded(
-          reader.cid,
-          reader.type,
-          reader.chapter,
-          reader.widget.chapters,
-        ))) {
-      try {
-        var images = await LocalManager().getImages(
-          reader.cid,
-          reader.type,
-          reader.chapter,
-        );
-        setState(() {
-          reader.images = images;
-          reader.isLoading = false;
-          inProgress = false;
-          _handleJumpToLastPage();
-          Future.microtask(() {
-            reader.updateHistory();
-          });
-        });
-      } catch (e) {
-        setState(() {
-          error = e.toString();
-          reader.isLoading = false;
-          inProgress = false;
-        });
-      }
-    } else {
-      var cp = reader.widget.chapters?.ids.elementAtOrNull(reader.chapter - 1);
-      var res = await reader.type.comicSource!.loadComicPages!(
-        reader.widget.cid,
-        cp,
-      );
-      if (res.error) {
-        setState(() {
-          error = res.errorMessage;
-          reader.isLoading = false;
-          inProgress = false;
-        });
-      } else {
-        setState(() {
-          reader.images = res.data;
-          reader.isLoading = false;
-          inProgress = false;
-          _handleJumpToLastPage();
-          Future.microtask(() {
-            reader.updateHistory();
-          });
-        });
-      }
-    }
-    context.readerScaffold.update();
-  }
-
   @override
   Widget build(BuildContext context) {
     if (reader.isLoading) {
-      load();
       return const Center(child: CircularProgressIndicator());
-    } else if (error != null) {
+    } else if (reader.error != null) {
       return GestureDetector(
         onTap: () {
           context.readerScaffold.openOrClose();
         },
         child: SizedBox.expand(
           child: NetworkError(
-            message: error!,
+            message: reader.error!,
             retry: () {
-              setState(() {
-                reader.isLoading = true;
-                error = null;
-              });
+              reader.changeChapter(reader.chapter);
             },
           ),
         ),
@@ -642,6 +566,12 @@ class _GalleryModeState extends State<_GalleryMode>
 
     return reader.images![startIndex];
   }
+
+  @override
+  void onChapterLoaded() {
+    // Gallery mode: jump the page controller to the target page after reload.
+    if (mounted) controller.jumpToPage(reader.page);
+  }
 }
 
 const Set<PointerDeviceKind> _kTouchLikeDeviceTypes = <PointerDeviceKind>{
@@ -961,9 +891,15 @@ class _ContinuousModeState extends State<_ContinuousMode>
     reader = context.reader;
     reader._imageViewController = this;
     itemPositionsListener.itemPositions.addListener(onPositionChanged);
-    _resetSplicedState();
-    _cachedSize = _spliced.length + 16;
-    cached = List.filled(_cachedSize, false);
+    // Only reset now if images are already available (e.g. preloaded before
+    // entering the reader). Otherwise onChapterLoaded() will reset after the
+    // async load completes — avoids reading a null images list.
+    if (reader.images != null) {
+      _resetSplicedState();
+      _cachedSize = _spliced.length + 16;
+      cached = List.filled(_cachedSize, false);
+    } else {
+    }
     // Suppress prepend on fresh init (covers chapter jump via toChapter)
     _suppressPrepend = true;
     _userScrolledUp = false;
@@ -974,32 +910,26 @@ class _ContinuousModeState extends State<_ContinuousMode>
     super.initState();
   }
 
-  /// Reset spliced state when toChapter() requested it (explicit jump),
-  /// without recreating the widget (legado-style: view stays alive).
-  void _consumeSplicedReset() {
-    if (reader._needsSplicedReset) {
-      reader._needsSplicedReset = false;
-      _resetSplicedState();
-      _cachedSize = _spliced.length + 16;
-      cached = List.filled(_cachedSize, false);
-      _suppressPrepend = true;
-      _userScrolledUp = false;
-    }
+  /// Called by the reader after a chapter switch's images are ready.
+  /// Resets the spliced list synchronously (no null window) and scrolls to
+  /// the target page. Legado-style: the view stays alive, only its data reloads.
+  @override
+  void onChapterLoaded() {
+    _resetSplicedState();
+    _cachedSize = _spliced.length + 16;
+    cached = List.filled(_cachedSize, false);
+    _suppressPrepend = true;
+    _userScrolledUp = false;
+    _lastScrollPos = null;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) itemScrollController.jumpTo(index: reader.page);
+    });
   }
 
   @override
   void dispose() {
     itemPositionsListener.itemPositions.removeListener(onPositionChanged);
     super.dispose();
-  }
-
-  @override
-  void didUpdateWidget(covariant _ContinuousMode oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    // Only reset spliced state on an explicit chapter jump (toChapter),
-    // signaled via _needsSplicedReset. Seamless cross-chapter scroll updates
-    // reader.chapter through onPositionChanged and must NOT trigger a reset.
-    _consumeSplicedReset();
   }
 
   void onPositionChanged() {
