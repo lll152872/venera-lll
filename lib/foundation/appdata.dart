@@ -300,6 +300,7 @@ class Settings with ChangeNotifier {
     'showSingleImageOnFirstPage': false,
     'enableDoubleTapToZoom': true,
     'reverseChapterOrder': false,
+    'historyRetentionDays': 14, // 0 = keep forever
     'showSystemStatusBar': false,
     'comicSpecificSettings': <String, Map<String, dynamic>>{},
     'deviceSpecificSettings': <String, Map<String, dynamic>>{},

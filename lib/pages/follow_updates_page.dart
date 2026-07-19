@@ -573,7 +573,25 @@ abstract class FollowUpdatesService {
       _isChecking = false;
       if (updated > 0) {
         updateFollowUpdatesUI();
+        _showUpdateNotification(updated);
       }
+    }
+  }
+
+  static void _showUpdateNotification(int count) {
+    try {
+      if (count <= 0) return;
+      var context = App.rootContext;
+      if (!context.mounted) return;
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(
+          content: Text('@c updates'.tlParams({'c': count.toString()})),
+          duration: const Duration(seconds: 4),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } catch (_) {
+      // Ignore errors when context is not available (e.g. app in background)
     }
   }
 

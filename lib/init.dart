@@ -8,6 +8,7 @@ import 'package:rhttp/rhttp.dart';
 import 'package:venera/foundation/app.dart';
 import 'package:venera/foundation/cache_manager.dart';
 import 'package:venera/foundation/comic_source/comic_source.dart';
+import 'package:venera/foundation/history.dart';
 import 'package:venera/foundation/js_engine.dart';
 import 'package:venera/foundation/log.dart';
 import 'package:venera/foundation/quick_search.dart';
@@ -122,4 +123,16 @@ Future<void> _checkAppUpdates() async {
 void checkUpdates() {
   _checkAppUpdates();
   FollowUpdatesService.initChecker();
+  _cleanOldHistory();
+}
+
+void _cleanOldHistory() {
+  final days = appdata.settings['historyRetentionDays'];
+  if (days is int && days > 0) {
+    HistoryManager().init();
+    final removed = HistoryManager().clearOldHistory(days);
+    if (removed > 0) {
+      Log.info('History', 'Cleaned $removed old history entries (older than $days days)');
+    }
+  }
 }

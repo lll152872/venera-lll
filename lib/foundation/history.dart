@@ -411,6 +411,46 @@ void clearUnfavoritedHistory() {
     return getAll().length;
   }
 
+  /// 清理超过 [days] 天的历史记录
+  ///
+  /// 保留收藏过的漫画的历史记录。
+  int clearOldHistory(int days) {
+    final cutoff =
+        DateTime.now().subtract(Duration(days: days)).millisecondsSinceEpoch;
+    int removed = 0;
+
+    _db.execute('BEGIN TRANSACTION;');
+    try {
+      final oldEntries = _db.select("""
+        select id, type from history
+        where time < ?;
+      """, [cutoff]);
+
+      for (var entry in oldEntries) {
+        final id = entry["id"] as String;
+        final type = ComicType(entry["type"] as int);
+        // 保留已收藏的漫画
+        if (LocalFavoritesManager().isExist(id, type)) {
+          continue;
+        }
+        _db.execute("""
+          delete from history
+          where id == ? and type == ?;
+        """, [id, type]);
+        removed++;
+      }
+      _db.execute('COMMIT;');
+    } catch (e) {
+      _db.execute('ROLLBACK;');
+      rethrow;
+    }
+    if (removed > 0) {
+      updateCache();
+      notifyListeners();
+    }
+    return removed;
+  }
+
   void close() {
     isInitialized = false;
     _db.dispose();
