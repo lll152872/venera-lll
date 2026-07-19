@@ -19,7 +19,6 @@ import 'package:venera/utils/data.dart';
 import 'package:venera/utils/data_sync.dart';
 import 'package:venera/utils/io.dart';
 import 'package:venera/utils/translations.dart';
-import 'package:yaml/yaml.dart';
 
 part 'reader.dart';
 part 'explore_settings.dart';
