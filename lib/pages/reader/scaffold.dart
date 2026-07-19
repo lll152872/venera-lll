@@ -16,6 +16,10 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
 
   static const kBottomBarHeight = 105.0;
 
+  /// Select-image overlay state (replaces OverlayEntry-based popup so the
+  /// reader body no longer depends on a surrounding Overlay).
+  bool _showSelectOverlay = false;
+
   bool get isOpen => _isOpen;
 
   bool get isReversed =>
@@ -162,6 +166,7 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
           right: 0,
           child: buildBottom(),
         ),
+        if (_showSelectOverlay) _buildSelectImageOverlay(),
       ],
     );
   }
@@ -917,28 +922,44 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
 
     var completer = Completer<Offset?>();
 
-    var overlay = Overlay.of(context);
-    OverlayEntry? entry;
-    entry = OverlayEntry(
-      builder: (context) {
-        return Positioned.fill(
-          child: _SelectImageOverlayContent(
-            onTap: (offset) {
-              completer.complete(offset);
-              entry!.remove();
-            },
-            onDispose: () {
-              if (!completer.isCompleted) {
-                completer.complete(null);
-              }
-            },
-          ),
-        );
-      },
-    );
-    overlay.insert(entry);
+    setState(() {
+      _showSelectOverlay = true;
+    });
+
+    // Resolve when the user taps inside the overlay.
+    _selectImageCompleter = completer;
 
     return completer.future;
+  }
+
+  Completer<Offset?>? _selectImageCompleter;
+
+  void _onSelectImageOverlayTap(Offset offset) {
+    final completer = _selectImageCompleter;
+    if (completer == null || !completer.isCompleted) {
+      completer?.complete(offset);
+    }
+    setState(() {
+      _showSelectOverlay = false;
+    });
+    _selectImageCompleter = null;
+  }
+
+  Widget _buildSelectImageOverlay() {
+    return Positioned.fill(
+      child: GestureDetector(
+        onTapDown: (details) => _onSelectImageOverlayTap(details.globalPosition),
+        child: Container(
+          color: Colors.black54,
+          child: const Center(
+            child: Text(
+              '点击选择图片',
+              style: TextStyle(color: Colors.white),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -1062,6 +1083,7 @@ class _BatteryWidgetState extends State<_BatteryWidget> {
       ],
     );
   }
+
 }
 
 class _ClockWidget extends StatefulWidget {
@@ -1114,69 +1136,6 @@ class _ClockWidgetState extends State<_ClockWidget> {
         ),
         Text(_currentTime),
       ],
-    );
-  }
-}
-
-class _SelectImageOverlayContent extends StatefulWidget {
-  const _SelectImageOverlayContent({
-    required this.onTap,
-    required this.onDispose,
-  });
-
-  final void Function(Offset) onTap;
-
-  final void Function() onDispose;
-
-  @override
-  State<_SelectImageOverlayContent> createState() =>
-      _SelectImageOverlayContentState();
-}
-
-class _SelectImageOverlayContentState
-    extends State<_SelectImageOverlayContent> {
-  @override
-  void dispose() {
-    widget.onDispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTapUp: (details) {
-        widget.onTap(details.globalPosition);
-      },
-      child: Container(
-        color: Colors.black.withAlpha(50),
-        child: Align(
-          alignment: Alignment(0, -0.8),
-          child: Container(
-            width: 232,
-            height: 42,
-            decoration: BoxDecoration(
-              color: context.colorScheme.surface,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: context.colorScheme.outlineVariant),
-            ),
-            child: Row(
-              children: [
-                const SizedBox(width: 8),
-                const Icon(Icons.info_outline),
-                const SizedBox(width: 16),
-                Text(
-                  "Click to select an image".tl,
-                  style: TextStyle(
-                    fontSize: 16,
-                    color: context.colorScheme.onSurface,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
     );
   }
 }

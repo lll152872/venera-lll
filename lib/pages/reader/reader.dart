@@ -186,14 +186,6 @@ class _ReaderState extends State<Reader>
 
   var focusNode = FocusNode();
 
-  Widget _buildReaderEntry(BuildContext context) {
-    return _ReaderScaffold(
-      child: _ReaderGestureDetector(
-        child: const _ReaderImages(),
-      ),
-    );
-  }
-
   @override
   void initState() {
     page = widget.initialPage ?? 1;
@@ -238,7 +230,6 @@ class _ReaderState extends State<Reader>
     Future.delayed(const Duration(milliseconds: 200), () {
       LocalFavoritesManager().onRead(cid, type);
     });
-    _readerEntry = OverlayEntry(builder: _buildReaderEntry);
     super.initState();
   }
 
@@ -291,20 +282,29 @@ class _ReaderState extends State<Reader>
     });
     PaintingBinding.instance.imageCache.maximumSizeBytes = 100 << 20;
     disposeReaderWindow();
-    _readerEntry?.remove();
-    _readerEntry?.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     _checkImagesPerPageChange();
+    // legado-style: reader body is a permanent child (like ReadView/curPage),
+    // NOT wrapped in an OverlayEntry, so toggling the toolbar or switching
+    // chapters never rebuilds/destroys the reader body. A separate empty
+    // Overlay is kept only for transient popups (e.g. image selection).
     return KeyboardListener(
       focusNode: focusNode,
       autofocus: true,
       onKeyEvent: onKeyEvent,
-      child: Overlay(
-        initialEntries: [_readerEntry!],
+      child: Stack(
+        children: [
+          _ReaderScaffold(
+            child: _ReaderGestureDetector(
+              child: const _ReaderImages(),
+            ),
+          ),
+          const Overlay(initialEntries: []),
+        ],
       ),
     );
   }
@@ -596,8 +596,6 @@ abstract mixin class _ReaderLocation {
 
   /// Flag to indicate that the page should jump to the last page after images are loaded.
   bool _jumpToLastPageOnLoad = false;
-
-  OverlayEntry? _readerEntry;
 
   /// Set by toChapter() to signal _ContinuousMode to reset its spliced state
   /// internally on the next build, instead of recreating the whole widget.
