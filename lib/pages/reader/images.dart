@@ -1340,7 +1340,9 @@ class _ContinuousModeState extends State<_ContinuousMode>
                   scrollController.position.minScrollExtent) {
             if (!_spliced.allPrevLoaded && !_spliced.prependingPrev) {
               _prependPrevChapter();
-            } else if (_spliced.allPrevLoaded && !reader.isFirstChapterOfGroup) {
+            } else if (_spliced.allPrevLoaded &&
+                !reader.isFirstChapterOfGroup &&
+                !_suppressPrepend) {
               if (!prepareToPrevChapter) {
                 jumpToPrevChapter = true;
                 jumpToNextChapter = false;
