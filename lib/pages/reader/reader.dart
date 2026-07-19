@@ -189,7 +189,7 @@ class _ReaderState extends State<Reader>
   Widget _buildReaderEntry(BuildContext context) {
     return _ReaderScaffold(
       child: _ReaderGestureDetector(
-        child: _ReaderImages(key: Key(chapter.toString())),
+        child: const _ReaderImages(),
       ),
     );
   }
@@ -599,6 +599,10 @@ abstract mixin class _ReaderLocation {
 
   OverlayEntry? _readerEntry;
 
+  /// Set by toChapter() to signal _ContinuousMode to reset its spliced state
+  /// internally on the next build, instead of recreating the whole widget.
+  bool _needsSplicedReset = false;
+
   int get page => _page;
 
   set page(int value) {
@@ -709,7 +713,7 @@ abstract mixin class _ReaderLocation {
       _jumpToLastPageOnLoad = toLastPage;
       isLoading = true;
       images = null;
-      _readerEntry?.markNeedsBuild();
+      _needsSplicedReset = true;
       update();
       return true;
     }

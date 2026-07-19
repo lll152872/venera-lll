@@ -1,7 +1,7 @@
 part of 'reader.dart';
 
 class _ReaderImages extends StatefulWidget {
-  const _ReaderImages({super.key});
+  const _ReaderImages();
 
   @override
   State<_ReaderImages> createState() => _ReaderImagesState();
@@ -956,12 +956,9 @@ class _ContinuousModeState extends State<_ContinuousMode>
     }
   }
 
-  int _lastKnownChapter = 0;
-
   @override
   void initState() {
     reader = context.reader;
-    _lastKnownChapter = reader.chapter;
     reader._imageViewController = this;
     itemPositionsListener.itemPositions.addListener(onPositionChanged);
     _resetSplicedState();
@@ -977,6 +974,19 @@ class _ContinuousModeState extends State<_ContinuousMode>
     super.initState();
   }
 
+  /// Reset spliced state when toChapter() requested it (explicit jump),
+  /// without recreating the widget (legado-style: view stays alive).
+  void _consumeSplicedReset() {
+    if (reader._needsSplicedReset) {
+      reader._needsSplicedReset = false;
+      _resetSplicedState();
+      _cachedSize = _spliced.length + 16;
+      cached = List.filled(_cachedSize, false);
+      _suppressPrepend = true;
+      _userScrolledUp = false;
+    }
+  }
+
   @override
   void dispose() {
     itemPositionsListener.itemPositions.removeListener(onPositionChanged);
@@ -986,17 +996,10 @@ class _ContinuousModeState extends State<_ContinuousMode>
   @override
   void didUpdateWidget(covariant _ContinuousMode oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // When Flutter reuses this widget (key unchanged), detect chapter changes
-    // and reset spliced state to avoid showing stale images from previous chapter
-    if (reader.chapter != _lastKnownChapter) {
-      _resetSplicedState();
-      _cachedSize = _spliced.length + 16;
-      cached = List.filled(_cachedSize, false);
-      _lastKnownChapter = reader.chapter;
-      // Suppress prepend after chapter jump
-      _suppressPrepend = true;
-      _userScrolledUp = false;
-    }
+    // Only reset spliced state on an explicit chapter jump (toChapter),
+    // signaled via _needsSplicedReset. Seamless cross-chapter scroll updates
+    // reader.chapter through onPositionChanged and must NOT trigger a reset.
+    _consumeSplicedReset();
   }
 
   void onPositionChanged() {
