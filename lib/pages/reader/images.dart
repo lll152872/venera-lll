@@ -1000,8 +1000,17 @@ class _ContinuousModeState extends State<_ContinuousMode>
   }
 
   void onPositionChanged() {
-    if (itemPositionsListener.itemPositions.value.isEmpty) return;
-    int gp = itemPositionsListener.itemPositions.value.first.index;
+    var positions = itemPositionsListener.itemPositions.value;
+    if (positions.isEmpty) return;
+    // Use the item closest to the viewport center, not the top-most visible item.
+    // The top-most item may belong to the previous chapter when chapters are
+    // spliced together, which would incorrectly rewind reader.chapter.
+    ItemPosition center = positions.reduce((a, b) {
+      double aCenter = (a.itemLeadingEdge + a.itemTrailingEdge) / 2;
+      double bCenter = (b.itemLeadingEdge + b.itemTrailingEdge) / 2;
+      return (aCenter - 0.5).abs() <= (bCenter - 0.5).abs() ? a : b;
+    });
+    int gp = center.index;
     gp = gp.clamp(1, _spliced.length);
     _updateReaderStateForSpliced(gp);
     _cacheSplicedImages(gp);
@@ -1325,8 +1334,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
               _appendNextChapter();
             }
           } else if (scrollController.position.pixels <=
-                  scrollController.position.minScrollExtent &&
-              !_suppressPrepend) {
+                  scrollController.position.minScrollExtent) {
             if (!_spliced.allPrevLoaded && !_spliced.prependingPrev) {
               _prependPrevChapter();
             } else if (_spliced.allPrevLoaded && !reader.isFirstChapterOfGroup) {

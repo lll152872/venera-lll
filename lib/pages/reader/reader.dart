@@ -186,6 +186,14 @@ class _ReaderState extends State<Reader>
 
   var focusNode = FocusNode();
 
+  Widget _buildReaderEntry(BuildContext context) {
+    return _ReaderScaffold(
+      child: _ReaderGestureDetector(
+        child: _ReaderImages(key: Key(chapter.toString())),
+      ),
+    );
+  }
+
   @override
   void initState() {
     page = widget.initialPage ?? 1;
@@ -230,6 +238,7 @@ class _ReaderState extends State<Reader>
     Future.delayed(const Duration(milliseconds: 200), () {
       LocalFavoritesManager().onRead(cid, type);
     });
+    _readerEntry = OverlayEntry(builder: _buildReaderEntry);
     super.initState();
   }
 
@@ -282,6 +291,8 @@ class _ReaderState extends State<Reader>
     });
     PaintingBinding.instance.imageCache.maximumSizeBytes = 100 << 20;
     disposeReaderWindow();
+    _readerEntry?.remove();
+    _readerEntry?.dispose();
     super.dispose();
   }
 
@@ -293,17 +304,7 @@ class _ReaderState extends State<Reader>
       autofocus: true,
       onKeyEvent: onKeyEvent,
       child: Overlay(
-        initialEntries: [
-          OverlayEntry(
-            builder: (context) {
-              return _ReaderScaffold(
-                child: _ReaderGestureDetector(
-                  child: _ReaderImages(key: Key(chapter.toString())),
-                ),
-              );
-            },
-          ),
-        ],
+        initialEntries: [_readerEntry!],
       ),
     );
   }
@@ -596,6 +597,8 @@ abstract mixin class _ReaderLocation {
   /// Flag to indicate that the page should jump to the last page after images are loaded.
   bool _jumpToLastPageOnLoad = false;
 
+  OverlayEntry? _readerEntry;
+
   int get page => _page;
 
   set page(int value) {
@@ -706,6 +709,7 @@ abstract mixin class _ReaderLocation {
       _jumpToLastPageOnLoad = toLastPage;
       isLoading = true;
       images = null;
+      _readerEntry?.markNeedsBuild();
       update();
       return true;
     }
