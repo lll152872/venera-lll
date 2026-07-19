@@ -436,7 +436,7 @@ void clearUnfavoritedHistory() {
         _db.execute("""
           delete from history
           where id == ? and type == ?;
-        """, [id, type]);
+        """, [id, type.value]);
         removed++;
       }
       _db.execute('COMMIT;');
