@@ -1325,7 +1325,8 @@ class _ContinuousModeState extends State<_ContinuousMode>
               _appendNextChapter();
             }
           } else if (scrollController.position.pixels <=
-                  scrollController.position.minScrollExtent) {
+                  scrollController.position.minScrollExtent &&
+              !_suppressPrepend) {
             if (!_spliced.allPrevLoaded && !_spliced.prependingPrev) {
               _prependPrevChapter();
             } else if (_spliced.allPrevLoaded && !reader.isFirstChapterOfGroup) {
