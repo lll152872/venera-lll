@@ -774,7 +774,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
   /// 未加载时回退到 _placeholderPageHeight（视口高，图片出来后变真实高）。
   /// 注意：图片加载后高度变化会导致 ListView 重排，prepend/append 的 jumpTo
   /// 必须用 _offsetForGp（累加偏移）而非 gp*固定值。
-  static const double kPageSpacing = 8.0; // 页间固定间距(dp)，legado 式
+  static const double kPageSpacing = 0.0; // 页间间距(dp)。legado 原版=0：图片首尾相接，零黑边零缝
   final Map<int, double> _pageHeights = {};
   double _placeholderPageHeight = 0; // 首帧占位（build 时赋视口高）
 
@@ -941,8 +941,18 @@ class _ContinuousModeState extends State<_ContinuousMode>
     _prefetchNeighbors(); // legado: keep next chapter ready for seamless switch
     _growCache(_spliced.length + kCacheGrowthPadding);
     var removed = _spliced.unloadExcess();
-    if (removed > 0 && cached.length > removed) {
-      cached.removeRange(0, removed);
+    if (removed > 0) {
+      if (cached.length > removed) cached.removeRange(0, removed);
+      // 头部删除了 removed 张图，平移 _pageHeights 的 key 保持一致。
+      if (_pageHeights.isNotEmpty) {
+        final Map<int, double> shifted = {};
+        _pageHeights.forEach((k, v) {
+          if (k > removed) shifted[k - removed] = v;
+        });
+        _pageHeights
+          ..clear()
+          ..addAll(shifted);
+      }
     }
   }
 
@@ -982,6 +992,15 @@ class _ContinuousModeState extends State<_ContinuousMode>
       pages = res.data;
     }
     int plen = _spliced.prepend(pages, prevCh);
+    // 头部插入 plen 张图后，所有 index 整体 +plen，平移 _pageHeights 的 key
+    // 避免头部 stale 高度错配（legado 同步测量无此问题，这里手动维护）。
+    if (_pageHeights.isNotEmpty) {
+      final Map<int, double> shifted = {};
+      _pageHeights.forEach((k, v) => shifted[k + plen] = v);
+      _pageHeights
+        ..clear()
+        ..addAll(shifted);
+    }
     // 显式设置 reader.chapter（对应 legado moveToPrevChapter 显式切章，不靠 listener 反算）
     reader.chapter = prevCh;
     reader.images = _spliced.imagesForChapter(prevCh);
@@ -1005,7 +1024,16 @@ class _ContinuousModeState extends State<_ContinuousMode>
       }
     });
     _growCache(_spliced.length + kCacheGrowthPadding);
-    _spliced.unloadExcess();
+    var removed = _spliced.unloadExcess();
+    if (removed > 0 && _pageHeights.isNotEmpty) {
+      final Map<int, double> shifted = {};
+      _pageHeights.forEach((k, v) {
+        if (k > removed) shifted[k - removed] = v;
+      });
+      _pageHeights
+        ..clear()
+        ..addAll(shifted);
+    }
   }
 
   void _growCache(int minSize) {
@@ -1157,9 +1185,13 @@ class _ContinuousModeState extends State<_ContinuousMode>
               reader._dbg('[DBG] ComicImage onInit idx=$index key=$imageKey');
               imageStates.add(state);
             },
-            onImageLoaded: (imgW, imgH) {
-              final vw = reader.size.width;
-              final h = vw * imgH / imgW;
+            onImageLoaded: (displayW, displayH) {
+              // ComicImage 已用 cell 实际宽度（含 limitImageWidth / safe area）
+              // 算好真实显示尺寸，直接采用，不再在外面用 reader.size 重算，
+              // 避免宽度不一致 → _pageHeights 与实际渲染高错位 → 大黑框/落点偏。
+              // 横向模式下 displayH 是沿滚动轴的尺寸（item 宽度），纵向是高度，
+              // 统一作为该页在滚动轴上的占用尺寸计入 _offsetForGp。
+              final double h = displayH;
               if ((_pageHeights[index] ?? -1) != h) {
                 _pageHeights[index] = h;
                 // 图片加载后该页高度变化 → ListView 重排。补偿滚动偏移，

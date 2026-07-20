@@ -67,9 +67,13 @@ class ComicImage extends StatefulWidget {
 
   final void Function(State<ComicImage> state)? onDispose;
 
-  /// Called once the image is decoded, with the raw image dimensions.
-  /// Lets the parent record per-page height for scroll-offset math.
-  final void Function(int width, int height)? onImageLoaded;
+  /// Called once the image is laid out, with the final *display* dimensions
+  /// (the size this widget actually takes after fit/contain + cell constraints).
+  /// The parent uses this for per-page scroll-offset math. Passing the real
+  /// display size (not the raw image size) keeps the parent's height bookkeeping
+  /// in sync with what the cell actually renders — avoiding black-bar/offset bugs
+  /// when the cell width differs from the reader box width (e.g. limitImageWidth).
+  final void Function(double displayWidth, double displayHeight)? onImageLoaded;
 
   static void clear() => _ComicImageState.clear();
 
@@ -88,6 +92,10 @@ class _ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
   late DisposableBuildContext<State<ComicImage>> _scrollAwareContext;
   Object? _lastException;
   ImageStreamCompleterHandle? _completerHandle;
+
+  /// Last display size reported to [onImageLoaded], to avoid re-notifying
+  /// the parent on every rebuild once the size is stable.
+  Size? _lastDisplaySize;
 
   static final Map<int, Size> _cache = {};
 
@@ -131,6 +139,7 @@ class _ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
   void didUpdateWidget(ComicImage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.image != oldWidget.image) {
+      _lastDisplaySize = null;
       _resolveImage();
     }
   }
@@ -204,8 +213,6 @@ class _ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
       _frameNumber = _frameNumber == null ? 0 : _frameNumber! + 1;
       _wasSynchronouslyLoaded = _wasSynchronouslyLoaded | synchronousCall;
     });
-    widget.onImageLoaded
-        ?.call(imageInfo.image.width, imageInfo.image.height);
   }
 
   void _handleImageChunk(ImageChunkEvent event) {
@@ -372,6 +379,19 @@ class _ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
       }
 
       if (_imageInfo != null) {
+        // Notify the parent of the real display size once it is known, so its
+        // per-page scroll-offset math matches what the cell actually renders.
+        if (widget.onImageLoaded != null) {
+          final Size newDisplay = Size(width!, height!);
+          if (_lastDisplaySize != newDisplay) {
+            _lastDisplaySize = newDisplay;
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) {
+                widget.onImageLoaded?.call(newDisplay.width, newDisplay.height);
+              }
+            });
+          }
+        }
         // build image
         Widget result = RawImage(
           // Do not clone the image, because RawImage is a stateless wrapper.
