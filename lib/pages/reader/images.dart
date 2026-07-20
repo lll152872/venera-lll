@@ -765,10 +765,19 @@ class _ContinuousModeState extends State<_ContinuousMode>
   /// 避免每帧 build 时 element 销毁重建导致滚动位置(pixels)归零（回退）。
   final GlobalKey _listKey = GlobalKey();
 
-  /// legado 式：用连续滚动像素算 gp，不依赖 ScrollablePositionedList 的
-  /// item index（item 重建时 index 会乱跳导致回退）。item 尺寸固定，
-  /// 所以 pixels / itemSize 稳定对应内容位置。
-  double _itemSize = 0;
+  /// legado 式：每页 item 高度 = 图片真实显示高度（宽度撑满视口时按图片
+  /// 比例算），页间固定间距 kPageSpacing。页码定位用「像素 → 累加每页高度
+  /// + 间距 → 落在哪一页」，不依赖固定 itemSize（legado 用中心 item position，
+  /// 同理：间距固定不影响页码判断）。
+  ///
+  /// _pageHeights[gp] 存每页真实显示高度（从 ComicImage 的 _cache 拿原图尺寸算）。
+  /// 未加载时回退到 _placeholderPageHeight（视口高，图片出来后变真实高）。
+  /// 注意：图片加载后高度变化会导致 ListView 重排，prepend/append 的 jumpTo
+  /// 必须用 _offsetForGp（累加偏移）而非 gp*固定值。
+  static const double kPageSpacing = 8.0; // 页间固定间距(dp)，legado 式
+  final Map<int, double> _pageHeights = {};
+  double _placeholderPageHeight = 0; // 首帧占位（build 时赋视口高）
+
   bool _isReversed = false;
 
   /// ── Download concurrency limiter ──
@@ -988,7 +997,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
       if (mounted) {
         int target = oldGp + plen;
         reader._dbg('[DBG] _prependPrevChapter postFrame jumpTo index=$target (oldGp=$oldGp plen=$plen)');
-        _scrollController.jumpTo(target * _itemSize);
+        _scrollController.jumpTo(_offsetForGp(target));
         // jumpTo 过渡帧（约 2-3 帧）后解除屏蔽，期间不会连锁触发
         Future.delayed(const Duration(milliseconds: kPrependSuppressWindowMs), () {
           if (mounted) _suppressPrepend = false;
@@ -1025,8 +1034,8 @@ class _ContinuousModeState extends State<_ContinuousMode>
     // Suppress prepend on fresh init (covers chapter jump via toChapter)
     _suppressPrepend = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && _itemSize > 0) {
-        _scrollController.jumpTo(reader.page * _itemSize);
+      if (mounted && _placeholderPageHeight > 0) {
+        _scrollController.jumpTo(_offsetForGp(reader.page));
       }
     });
     Future.delayed(
@@ -1036,25 +1045,41 @@ class _ContinuousModeState extends State<_ContinuousMode>
     super.initState();
   }
 
+  /// 第 gp 页（1-based）的显示高度：从 _pageHeights 拿真实高，未加载回退占位。
+  double _pageHeight(int gp) {
+    return _pageHeights[gp] ?? _placeholderPageHeight;
+  }
+
+  /// 第 gp 页起始处的像素偏移 = Σ_{i=1}^{gp-1} (pageHeight(i) + kPageSpacing)。
+  /// 头尾占位 SizedBox（index 0 / length+1）不计入（它们高度为 0）。
+  double _offsetForGp(int gp) {
+    double off = 0;
+    for (int i = 1; i < gp; i++) {
+      off += _pageHeight(i) + kPageSpacing;
+    }
+    return off;
+  }
+
   /// Reads the global page at the viewport center synchronously.
   int _currentCenterGp() {
-    if (_itemSize <= 0) return 1;
+    if (_placeholderPageHeight <= 0) return 1;
     return _gpFromPixels(_scrollController.position.pixels).clamp(1, _spliced.length);
   }
 
   /// Converts scroll [pixels] to a 1-based global page.
-  /// Reverse mode (continuousRightToLeft) mirrors the axis: pixels=0 is the
-  /// end of the list, pixels=max is the start. Item size is fixed so this
-  /// mapping is stable across frames (legado-style: no item-index reliance).
+  /// 与 legado 一致：页码由「累加每页高度+间距」定位，不依赖固定 itemSize。
+  /// 间距固定故不影响页码判断。reverse 模式镜像轴（pixels=0 是列表末尾）。
   int _gpFromPixels(double pixels) {
-    double maxScroll = _scrollController.position.maxScrollExtent;
-    int gp;
-    if (_isReversed) {
-      gp = ((maxScroll - pixels) / _itemSize).round() + 1;
-    } else {
-      gp = (pixels / _itemSize).round() + 1;
+    final double maxScroll = _scrollController.position.maxScrollExtent;
+    final double target = _isReversed ? (maxScroll - pixels) : pixels;
+    // 累加找落点
+    double acc = 0;
+    for (int i = 1; i <= _spliced.length; i++) {
+      final double h = _pageHeight(i) + kPageSpacing;
+      if (target < acc + h / 2) return i; // 落在第 i 页前半 → 算第 i 页
+      acc += h;
     }
-    return gp;
+    return _spliced.length; // 超出末尾
   }
 
   /// Called by the reader after a chapter switch's images are ready.
@@ -1067,7 +1092,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
     cached = List.filled(_cachedSize, false);
     _suppressPrepend = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _scrollController.jumpTo(reader.page * _itemSize);
+      if (mounted) _scrollController.jumpTo(_offsetForGp(reader.page));
       // 章节切换后延时解除屏蔽，避免 jumpTo 过渡帧连锁触发 prepend
       Future.delayed(const Duration(milliseconds: kPrependSuppressWindowMs), () {
         if (mounted) _suppressPrepend = false;
@@ -1106,56 +1131,63 @@ class _ContinuousModeState extends State<_ContinuousMode>
           enableResize: true,
         );
 
-        // 固定 item 尺寸 = 屏幕尺寸，不随图片加载变化高度，避免
-        // ScrollablePositionedList 因 item 高度跳变导致滚动位置错位（回退）。
-        // 图片用 BoxFit.contain 在固定框内居中显示（legado 式稳定布局）。
-        return LayoutBuilder(
-          builder: (context, constraints) {
-            final screen = MediaQuery.of(context);
-            double? width, height;
-            if (reader.mode == ReaderMode.continuousLeftToRight ||
-                reader.mode == ReaderMode.continuousRightToLeft) {
-              height = screen.size.height;
-              width = screen.size.width;
-            } else {
-              width = screen.size.width;
-              height = screen.size.height;
-            }
-            // 用 SizedBox 强制固定 item 尺寸，避免 ComicImage 内部 RawImage 的
-            // intrinsic size 影响 ScrollablePositionedList 对 item 高度的测量，
-            // 从而防止图片加载完成后列表重测导致滚动位置归零（回退）。
-            return SizedBox(
-              width: width,
-              height: height,
-              child: ColoredBox(
-                color: context.colorScheme.surface,
-                child: ComicImage(
-                  key: ValueKey(imageKey),
-                  gaplessPlayback: true,
-                  filterQuality: FilterQuality.medium,
-                  image: image,
-                  width: width,
-                  height: height,
-                  fit: BoxFit.contain,
-                  onInit: (state) {
-                    reader._dbg('[DBG] ComicImage onInit idx=$index key=$imageKey');
-                    imageStates.add(state);
-                  },
-                  onDispose: (state) {
-                    reader._dbg('[DBG] ComicImage onDispose idx=$index key=$imageKey');
-                    imageStates.remove(state);
-                  },
-                ),
-              ),
-            );
-          },
+        // 用 double.infinity 让 item 撑满 ListView 给的真实视口约束，
+        // 而不是写死 MediaQuery.size。写死会在手机端(有系统栏/safe area，
+        // 真实视口 < MediaQuery.size)导致每页比可用空间高、底部溢出黑边。
+        // 与重构前 ScrollablePositionedList 时代的策略一致。
+        double? width, height;
+        if (reader.mode == ReaderMode.continuousLeftToRight ||
+            reader.mode == ReaderMode.continuousRightToLeft) {
+          height = double.infinity;
+        } else {
+          width = double.infinity;
+        }
+
+        return ColoredBox(
+          color: context.colorScheme.surface,
+          child: ComicImage(
+            key: ValueKey(imageKey),
+            gaplessPlayback: true,
+            filterQuality: FilterQuality.medium,
+            image: image,
+            width: width,
+            height: height,
+            fit: BoxFit.contain,
+            onInit: (state) {
+              reader._dbg('[DBG] ComicImage onInit idx=$index key=$imageKey');
+              imageStates.add(state);
+            },
+            onImageLoaded: (imgW, imgH) {
+              final vw = reader.size.width;
+              final h = vw * imgH / imgW;
+              if ((_pageHeights[index] ?? -1) != h) {
+                _pageHeights[index] = h;
+                // 图片加载后该页高度变化 → ListView 重排。补偿滚动偏移，
+                // 避免前面页高度变化把当前视图下推（legado 用 scrollY 锚定同理）。
+                final double beforeChange = _scrollController.position.pixels;
+                final double beforeOffset = _offsetForGp(_currentCenterGp());
+                setState(() {});
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (!mounted) return;
+                  final double afterOffset = _offsetForGp(_currentCenterGp());
+                  _scrollController.jumpTo(
+                    beforeChange + (afterOffset - beforeOffset),
+                  );
+                });
+              }
+            },
+            onDispose: (state) {
+              reader._dbg('[DBG] ComicImage onDispose idx=$index key=$imageKey');
+              imageStates.remove(state);
+            },
+          ),
         );
   }
 
   void _syncReaderState() {
-    if (_itemSize <= 0) return;
+    if (_placeholderPageHeight <= 0) return;
     // legado 式：用连续滚动像素算 gp，不依赖 item index（item 重建时
-    // index 会乱跳导致回退）。item 尺寸固定(_itemSize)，pixels 稳定对应内容。
+    // index 会乱跳导致回退）。页码由「累加每页高度+间距」定位，间距固定不影响判断。
     // 自有 ScrollController 的 pixels 不受 ListView item 重建影响，不会归零。
     double pixels = _scrollController.position.pixels;
     double maxScroll = _scrollController.position.maxScrollExtent;
@@ -1165,7 +1197,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
       flag = ' <<< GP JUMP (delta=${gp - _lastSyncedGp}, no splice active)';
     }
     _lastSyncedGp = gp;
-    reader._dbg('[DBG] _syncReaderState gp=$gp chapter=${reader.chapter} pixels=$pixels itemCount=${_spliced.length} maxScroll=$maxScroll reversed=$_isReversed itemSize=$_itemSize$flag');
+    reader._dbg('[DBG] _syncReaderState gp=$gp chapter=${reader.chapter} pixels=$pixels itemCount=${_spliced.length} maxScroll=$maxScroll reversed=$_isReversed placeholder=$_placeholderPageHeight$flag');
     _updateReaderStateForSpliced(gp);
     _cacheSplicedImages(gp);
   }
@@ -1301,9 +1333,12 @@ class _ContinuousModeState extends State<_ContinuousMode>
   @override
   Widget build(BuildContext context) {
     reader._dbg('[DBG] BUILD called spliceLen=${_spliced.length} readerPage=${reader.page} readerChapter=${reader.chapter}');
-    final screen = MediaQuery.of(context);
     bool horizontal = reader.mode != ReaderMode.continuousTopToBottom;
-    _itemSize = horizontal ? screen.size.width : screen.size.height;
+    // 占位高度：首帧图片未加载时用，作为 _pageHeight 回退值。
+    // 用 reader.size（实际渲染盒）而非 MediaQuery：手机端有系统栏/safe area，
+    // MediaQuery.size 比真实视口大，占位过高会错位。图片加载后由 onImageLoaded
+    // 写入 _pageHeights[gp] 真实高，占位即被取代。
+    _placeholderPageHeight = horizontal ? reader.size.width : reader.size.height;
     _isReversed = reader.mode == ReaderMode.continuousRightToLeft;
     Widget widget = ListView.builder(
       key: _listKey,
@@ -1456,7 +1491,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
   Future<void> animateToPage(int page) {
     int gp = _spliced.globalGpForChapterPage(reader.chapter, page);
     return _scrollController.animateTo(
-      gp * _itemSize,
+      _offsetForGp(gp),
       duration: const Duration(milliseconds: 200),
       curve: Curves.ease,
     );
@@ -1518,7 +1553,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
   @override
   void toPage(int page) {
     int gp = _spliced.globalGpForChapterPage(reader.chapter, page);
-    _scrollController.jumpTo(gp * _itemSize);
+    _scrollController.jumpTo(_offsetForGp(gp));
     _futurePosition = null;
   }
 
