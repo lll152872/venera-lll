@@ -574,14 +574,6 @@ class _GalleryModeState extends State<_GalleryMode>
   }
 }
 
-const Set<PointerDeviceKind> _kTouchLikeDeviceTypes = <PointerDeviceKind>{
-  PointerDeviceKind.touch,
-  PointerDeviceKind.mouse,
-  PointerDeviceKind.stylus,
-  PointerDeviceKind.invertedStylus,
-  PointerDeviceKind.unknown,
-};
-
 /// Manages the cross-chapter seamless scrolling data model.
 ///
 /// Holds the spliced image list and chapter offset/length metadata.
@@ -755,6 +747,17 @@ class _ContinuousModeState extends State<_ContinuousMode>
   bool isZoomedIn = false;
   bool isLongPressing = false;
 
+  /// ── Tunable constants (kept here so timing/sizing is easy to find) ──
+  /// 解除 prepend 屏蔽的窗口：jumpTo 过渡帧约 2-3 帧后解除，
+  /// 期间不会因过渡帧报旧 gp 而连锁触发 prepend（legado 式）。
+  static const int kPrependSuppressWindowMs = 250;
+  /// 滚动状态标志(用于禁双击翻页)的滞后设置窗口。
+  static const int kScrollingFlagDelayMs = 300;
+  /// 进入阅读器后首次预加载图片的延迟（等首帧布局完成再缓存）。
+  static const int kInitCacheDelayMs = 100;
+  /// cached[] 列表的缓冲余量：每次 grow 多留 16 格，减少频繁重建。
+  static const int kCacheGrowthPadding = 16;
+
   /// ── Cross-chapter seamless scrolling data ──
   late final SplicedChapters _spliced = SplicedChapters();
 
@@ -841,7 +844,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
   bool _suppressPrepend = false;
   void delayedSetIsScrolling(bool value) {
     Future.delayed(
-      const Duration(milliseconds: 300),
+      const Duration(milliseconds: kScrollingFlagDelayMs),
       () => delayedIsScrolling = value,
     );
   }
@@ -850,6 +853,11 @@ class _ContinuousModeState extends State<_ContinuousMode>
     _spliced.reset(reader.images!, reader.chapter);
   }
 
+  /// Syncs _ReaderState (chapter + page) from a global page position.
+  /// Skips the chapter switch while a splice/jump transition is in flight
+  /// (or suppressed) to avoid reverse-calculation glitches that cause jumps.
+  /// Uses a boundary hysteresis: only switches chapter once the global page
+  /// is clearly inside the middle of the target chapter, not on its edge.
   void _updateReaderStateForSpliced(int globalPage) {
     var (int chap, int localPage, int chapLen) = _spliced.chapterOfPage(globalPage);
     reader._dbg('[DBG] _updateReaderStateForSpliced IN gp=$globalPage -> chap=$chap localPage=$localPage chapLen=$chapLen curChapter=${reader.chapter} suppress=$_suppressPrepend append=${_spliced.appendingNext} prepend=${_spliced.prependingPrev}');
@@ -922,7 +930,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
     });
     reader._dbg('[DBG] _appendNextChapter DONE appendedCh=$nextCh splicedLen=${_spliced.length}');
     _prefetchNeighbors(); // legado: keep next chapter ready for seamless switch
-    _growCache(_spliced.length + 16);
+    _growCache(_spliced.length + kCacheGrowthPadding);
     var removed = _spliced.unloadExcess();
     if (removed > 0 && cached.length > removed) {
       cached.removeRange(0, removed);
@@ -982,18 +990,18 @@ class _ContinuousModeState extends State<_ContinuousMode>
         reader._dbg('[DBG] _prependPrevChapter postFrame jumpTo index=$target (oldGp=$oldGp plen=$plen)');
         _scrollController.jumpTo(target * _itemSize);
         // jumpTo 过渡帧（约 2-3 帧）后解除屏蔽，期间不会连锁触发
-        Future.delayed(const Duration(milliseconds: 250), () {
+        Future.delayed(const Duration(milliseconds: kPrependSuppressWindowMs), () {
           if (mounted) _suppressPrepend = false;
         });
       }
     });
-    _growCache(_spliced.length + 16);
+    _growCache(_spliced.length + kCacheGrowthPadding);
     _spliced.unloadExcess();
   }
 
   void _growCache(int minSize) {
     if (_cachedSize < minSize) {
-      int newSize = minSize + 16;
+      int newSize = minSize + kCacheGrowthPadding;
       var nc = List.filled(newSize, false);
       for (int i = 0; i < cached.length; i++) { nc[i] = cached[i]; }
       cached = nc;
@@ -1011,7 +1019,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
     // async load completes — avoids reading a null images list.
     if (reader.images != null) {
       _resetSplicedState();
-      _cachedSize = _spliced.length + 16;
+      _cachedSize = _spliced.length + kCacheGrowthPadding;
       cached = List.filled(_cachedSize, false);
     }
     // Suppress prepend on fresh init (covers chapter jump via toChapter)
@@ -1022,7 +1030,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
       }
     });
     Future.delayed(
-      const Duration(milliseconds: 100),
+      const Duration(milliseconds: kInitCacheDelayMs),
       () => _cacheSplicedImages(reader.page),
     );
     super.initState();
@@ -1031,7 +1039,14 @@ class _ContinuousModeState extends State<_ContinuousMode>
   /// Reads the global page at the viewport center synchronously.
   int _currentCenterGp() {
     if (_itemSize <= 0) return 1;
-    double pixels = _scrollController.position.pixels;
+    return _gpFromPixels(_scrollController.position.pixels).clamp(1, _spliced.length);
+  }
+
+  /// Converts scroll [pixels] to a 1-based global page.
+  /// Reverse mode (continuousRightToLeft) mirrors the axis: pixels=0 is the
+  /// end of the list, pixels=max is the start. Item size is fixed so this
+  /// mapping is stable across frames (legado-style: no item-index reliance).
+  int _gpFromPixels(double pixels) {
     double maxScroll = _scrollController.position.maxScrollExtent;
     int gp;
     if (_isReversed) {
@@ -1039,7 +1054,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
     } else {
       gp = (pixels / _itemSize).round() + 1;
     }
-    return gp.clamp(1, _spliced.length);
+    return gp;
   }
 
   /// Called by the reader after a chapter switch's images are ready.
@@ -1048,13 +1063,13 @@ class _ContinuousModeState extends State<_ContinuousMode>
   @override
   void onChapterLoaded() {
     _resetSplicedState();
-    _cachedSize = _spliced.length + 16;
+    _cachedSize = _spliced.length + kCacheGrowthPadding;
     cached = List.filled(_cachedSize, false);
     _suppressPrepend = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _scrollController.jumpTo(reader.page * _itemSize);
       // 章节切换后延时解除屏蔽，避免 jumpTo 过渡帧连锁触发 prepend
-      Future.delayed(const Duration(milliseconds: 250), () {
+      Future.delayed(const Duration(milliseconds: kPrependSuppressWindowMs), () {
         if (mounted) _suppressPrepend = false;
       });
       _prefetchNeighbors(); // legado: prefetch prev/next on entry for seamless switch
@@ -1070,6 +1085,10 @@ class _ContinuousModeState extends State<_ContinuousMode>
   /// 上一帧 gp，用于检测 gp 突变（无滚动时大跳 = 回退根因线索）
   int _lastSyncedGp = -1;
 
+  /// Builds one list item (a single full-screen comic page) for the spliced
+  /// list. Item size is forced to the screen size so the ListView never
+  /// re-measures items when images load (that re-measure is what reset the
+  /// scroll position and caused jumps before the legado-style rewrite).
   Widget _buildSplicedItem(BuildContext context, int index) {
         if (index == 0 || index == _spliced.length + 1) {
           return const SizedBox();
@@ -1140,14 +1159,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
     // 自有 ScrollController 的 pixels 不受 ListView item 重建影响，不会归零。
     double pixels = _scrollController.position.pixels;
     double maxScroll = _scrollController.position.maxScrollExtent;
-    int gp;
-    if (_isReversed) {
-      // reverse 模式：pixels=0 对应最右端(列表末尾), pixels=max 对应开头
-      gp = ((maxScroll - pixels) / _itemSize).round() + 1;
-    } else {
-      gp = (pixels / _itemSize).round() + 1;
-    }
-    gp = gp.clamp(1, _spliced.length);
+    int gp = _gpFromPixels(pixels).clamp(1, _spliced.length);
     String flag = '';
     if (_lastSyncedGp >= 0 && (gp - _lastSyncedGp).abs() > 3 && !_spliced.appendingNext && !_spliced.prependingPrev && !_suppressPrepend) {
       flag = ' <<< GP JUMP (delta=${gp - _lastSyncedGp}, no splice active)';
@@ -1208,6 +1220,9 @@ class _ContinuousModeState extends State<_ContinuousMode>
 
   double? _futurePosition;
 
+  /// Mouse-wheel / trackpad smooth scrolling. Accumulates a target offset in
+  /// [_futurePosition] and eases toward it; Shift disables it. Speed scales
+  /// with the reader's scroll-speed setting.
   void smoothTo(double offset) {
     if (HardwareKeyboard.instance.isShiftPressed) {
       return;
@@ -1250,6 +1265,8 @@ class _ContinuousModeState extends State<_ContinuousMode>
         });
   }
 
+  /// Forwards mouse-wheel scroll events to [smoothTo] (Ctrl is reserved for
+  /// zoom, so it's ignored here).
   void onPointerSignal(PointerSignalEvent event) {
     if (event is PointerScrollEvent) {
       if (!_isMouseScrolling) {
@@ -1265,9 +1282,9 @@ class _ContinuousModeState extends State<_ContinuousMode>
   }
 
   void onScroll() {
-    var pixels = _scrollController?.position.pixels;
-    var min = _scrollController?.position.minScrollExtent;
-    var max = _scrollController?.position.maxScrollExtent;
+    var pixels = _scrollController.position.pixels;
+    var min = _scrollController.position.minScrollExtent;
+    var max = _scrollController.position.maxScrollExtent;
     reader._dbg('[DBG] onScroll pixels=$pixels min=$min max=$max itemCount=${_spliced.length}');
   }
 
@@ -1445,11 +1462,6 @@ class _ContinuousModeState extends State<_ContinuousMode>
     );
   }
 
-  /// 把章节内 page(1-based) 转成拼接列表的全局 gp。
-  /// 连续模式多章拼接后，滚动位置是全局的，不能直接用章节内 page。
-  int _globalGpForChapterPage(int chapter, int page) =>
-      _spliced.globalGpForChapterPage(chapter, page);
-
   @override
   void handleDoubleTap(Offset location) {
     if (appdata.settings['quickCollectImage'] == 'DoubleTap') {
@@ -1505,7 +1517,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
 
   @override
   void toPage(int page) {
-    int gp = _globalGpForChapterPage(reader.chapter, page);
+    int gp = _spliced.globalGpForChapterPage(reader.chapter, page);
     _scrollController.jumpTo(gp * _itemSize);
     _futurePosition = null;
   }
