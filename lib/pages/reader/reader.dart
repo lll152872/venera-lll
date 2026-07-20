@@ -640,8 +640,12 @@ abstract mixin class _ReaderLocation {
 
   void update();
 
-  /// Debug logger writing to reader_dbg.log (relative to exe cwd). Temporary.
+  /// Debug logger writing to reader_dbg.log (relative to exe cwd).
+  /// Only active in debug builds — release builds (incl. phone APK) skip it
+  /// entirely (kDebugMode is false and tree-shaken), so no log file is ever
+  /// created on release.
   void _dbg(String s) {
+    if (!kDebugMode) return;
     try {
       File('reader_dbg.log').writeAsStringSync(
         '${DateTime.now().toIso8601String()} $s\n',
