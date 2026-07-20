@@ -1185,26 +1185,31 @@ class _ContinuousModeState extends State<_ContinuousMode>
               reader._dbg('[DBG] ComicImage onInit idx=$index key=$imageKey');
               imageStates.add(state);
             },
-            onImageLoaded: (displayW, displayH) {
-              // ComicImage 已用 cell 实际宽度（含 limitImageWidth / safe area）
-              // 算好真实显示尺寸，直接采用，不再在外面用 reader.size 重算，
-              // 避免宽度不一致 → _pageHeights 与实际渲染高错位 → 大黑框/落点偏。
-              // 横向模式下 displayH 是沿滚动轴的尺寸（item 宽度），纵向是高度，
-              // 统一作为该页在滚动轴上的占用尺寸计入 _offsetForGp。
-              final double h = displayH;
+            onImageLoaded: (imgW, imgH) {
+              // 按实际视口宽算真实显示高（readSize.width 与 cell 约束一致，
+              // 除非 limitImageWidth 启用，但用户反馈该选项无区别）。
+              final bool horizontal = reader.mode != ReaderMode.continuousTopToBottom;
+              final double cellSize = horizontal ? reader.size.height : reader.size.width;
+              final double h = horizontal
+                  ? cellSize * imgW / imgH  // 横向：真实宽 = 视口高 * 图宽/图高
+                  : cellSize * imgH / imgW; // 纵向：真实高 = 视口宽 * 图高/图宽
               if ((_pageHeights[index] ?? -1) != h) {
-                _pageHeights[index] = h;
-                // 图片加载后该页高度变化 → ListView 重排。补偿滚动偏移，
-                // 避免前面页高度变化把当前视图下推（legado 用 scrollY 锚定同理）。
+                // ⚠️ 先捕获 beforeOffset 再更新 _pageHeights，
+                // 否则 beforeOffset 已含新高度 → Δ=0 → 补偿永不执行。
                 final double beforeChange = _scrollController.position.pixels;
-                final double beforeOffset = _offsetForGp(_currentCenterGp());
+                final int beforeGp = _currentCenterGp();
+                final double beforeOffset = _offsetForGp(beforeGp);
+                _pageHeights[index] = h;
                 setState(() {});
                 WidgetsBinding.instance.addPostFrameCallback((_) {
                   if (!mounted) return;
-                  final double afterOffset = _offsetForGp(_currentCenterGp());
-                  _scrollController.jumpTo(
-                    beforeChange + (afterOffset - beforeOffset),
-                  );
+                  final double afterOffset = _offsetForGp(beforeGp);
+                  final double target = beforeChange + (afterOffset - beforeOffset);
+                  // clamp 安全：maxScrollExtent 可能因未加载的占位 300px 而偏小。
+                  _scrollController.jumpTo(target.clamp(
+                    _scrollController.position.minScrollExtent,
+                    _scrollController.position.maxScrollExtent,
+                  ));
                 });
               }
             },
@@ -1365,12 +1370,10 @@ class _ContinuousModeState extends State<_ContinuousMode>
   @override
   Widget build(BuildContext context) {
     reader._dbg('[DBG] BUILD called spliceLen=${_spliced.length} readerPage=${reader.page} readerChapter=${reader.chapter}');
-    bool horizontal = reader.mode != ReaderMode.continuousTopToBottom;
-    // 占位高度：首帧图片未加载时用，作为 _pageHeight 回退值。
-    // 用 reader.size（实际渲染盒）而非 MediaQuery：手机端有系统栏/safe area，
-    // MediaQuery.size 比真实视口大，占位过高会错位。图片加载后由 onImageLoaded
-    // 写入 _pageHeights[gp] 真实高，占位即被取代。
-    _placeholderPageHeight = horizontal ? reader.size.width : reader.size.height;
+    // 占位高度：必须与 ComicImage 内部 LayoutBuilder 的未加载 fallback 一致
+    //（comic_image.dart:367 "height = 300"），否则完全加载前 _offsetForGp
+    // 用全屏高 ~2000px 累加，但 ListView 实际 item 只有 300px，偏移数学全错。
+    _placeholderPageHeight = 300.0;
     _isReversed = reader.mode == ReaderMode.continuousRightToLeft;
     Widget widget = ListView.builder(
       key: _listKey,
