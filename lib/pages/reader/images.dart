@@ -582,8 +582,6 @@ const Set<PointerDeviceKind> _kTouchLikeDeviceTypes = <PointerDeviceKind>{
   PointerDeviceKind.unknown,
 };
 
-const double _kChangeChapterOffset = 160;
-
 /// Manages the cross-chapter seamless scrolling data model.
 ///
 /// Holds the spliced image list and chapter offset/length metadata.
@@ -621,6 +619,10 @@ class SplicedChapters {
 
   /// Returns (chapterNum, localPage, chapterLen) for the given global page.
   (int chapter, int localPage, int len) chapterOfPage(int gp) {
+    // 严格大于：边界 gp 归前一章（legado 式 [i] < x <= [i+1]）。
+    // 例如 ch48 占 gp [11,21]，offset=11；ch49 offset=22。
+    // gp=21 -> 21>11 且 21 不大于 22 -> ch48（正确，ch48 最后一页）。
+    // gp=22 -> 22>22 否，进入 i-1 检查 -> ch49（ch49 第一页）。
     for (int i = _offsets.length - 1; i >= 0; i--) {
       if (gp > _offsets[i]) {
         return (_chapNums[i], gp - _offsets[i], _chapLens[i]);
@@ -635,6 +637,14 @@ class SplicedChapters {
     if (idx < 0) return [];
     int start = _offsets[idx];
     return images.sublist(start, start + _chapLens[idx]);
+  }
+
+  /// 章节内 page(1-based) → 拼接列表的全局 gp(1-based)。
+  /// 连续模式多章拼接后滚动位置是全局的，点击翻页需用全局 gp。
+  int globalGpForChapterPage(int chapterNum, int page) {
+    int idx = _chapNums.indexOf(chapterNum);
+    if (idx < 0) return page; // 当前章不在 spliced 里，fallback
+    return _offsets[idx] + page;
   }
 
   /// Appends the next chapter's images to the end of the spliced list.
@@ -684,17 +694,22 @@ class SplicedChapters {
 
   /// Whether the spliced list should try appending the next chapter.
   bool shouldAppendNext(int currentGp) {
-    return !appendingNext &&
-        !allNextLoaded &&
-        images.length - currentGp <= kPreloadAhead;
+    if (appendingNext || allNextLoaded) return false;
+    if (images.length - currentGp > kPreloadAhead) return false;
+    // 防重复：下一章若已在拼接列表中则不再 append
+    int next = lastChapterNum + 1;
+    if (_chapNums.contains(next)) return false;
+    return true;
   }
 
   /// Whether the spliced list should try prepending the previous chapter.
   bool shouldPrependPrev(int currentGp, bool suppressed) {
-    return !suppressed &&
-        !prependingPrev &&
-        !allPrevLoaded &&
-        currentGp <= kPreloadAhead + 1;
+    if (suppressed || prependingPrev || allPrevLoaded) return false;
+    if (currentGp > kPreloadAhead + 1) return false;
+    // 防重复：前一章若已在拼接列表中则不再 prepend
+    int prev = firstChapterNum - 1;
+    if (prev < 1 || _chapNums.contains(prev)) return false;
+    return true;
   }
 
   void markAppending(bool v) => appendingNext = v;
@@ -704,6 +719,9 @@ class SplicedChapters {
 
   int get lastChapterNum => _chapNums.last;
   int get firstChapterNum => _chapNums.first;
+
+  /// Whether a chapter number is already spliced into the list.
+  bool containsChapter(int n) => _chapNums.contains(n);
 }
 
 class _ContinuousMode extends StatefulWidget {
@@ -717,12 +735,10 @@ class _ContinuousModeState extends State<_ContinuousMode>
     implements _ImageViewController {
   late _ReaderState reader;
 
-  var itemScrollController = ItemScrollController();
-  var itemPositionsListener = ItemPositionsListener.create();
+  // 自有 ScrollController：完全掌控滚动位置，避免 ScrollablePositionedList
+  // 在 item 重建时把 pixels 归零导致回退（legado 式：自己管滚动）。
+  late final ScrollController _scrollController = ScrollController();
   var photoViewController = PhotoViewController();
-  ScrollController? _scrollController;
-
-  ScrollController get scrollController => _scrollController!;
 
   var isCTRLPressed = false;
   static var _isMouseScrolling = false;
@@ -741,6 +757,16 @@ class _ContinuousModeState extends State<_ContinuousMode>
 
   /// ── Cross-chapter seamless scrolling data ──
   late final SplicedChapters _spliced = SplicedChapters();
+
+  /// 恒定 GlobalKey：强制 ListView 的 element 永久复用，
+  /// 避免每帧 build 时 element 销毁重建导致滚动位置(pixels)归零（回退）。
+  final GlobalKey _listKey = GlobalKey();
+
+  /// legado 式：用连续滚动像素算 gp，不依赖 ScrollablePositionedList 的
+  /// item index（item 重建时 index 会乱跳导致回退）。item 尺寸固定，
+  /// 所以 pixels / itemSize 稳定对应内容位置。
+  double _itemSize = 0;
+  bool _isReversed = false;
 
   /// ── Download concurrency limiter ──
   /// Prevents launching too many parallel image downloads at once.
@@ -766,6 +792,41 @@ class _ContinuousModeState extends State<_ContinuousMode>
     }
   }
 
+  /// ── Legado-style adjacent chapter prefetch ──
+  /// Stores prefetched page-URL lists for neighbor chapters so that switching
+  /// to them is instant (no network wait at the boundary).
+  final Map<int, List<String>> _prefetchedChapters = {};
+
+  /// Prefetch the page list (and first few images) of [ch] in the background.
+  /// Does nothing if already spliced or already prefetched.
+  void _prefetchChapter(int ch) {
+    if (ch < 1 || ch > reader.maxChapter) return;
+    if (_spliced.containsChapter(ch)) return;
+    if (_prefetchedChapters.containsKey(ch)) return;
+    String eid = reader.widget.chapters?.ids.elementAtOrNull(ch - 1) ?? '';
+    if (eid.isEmpty) return;
+    _prefetchedChapters[ch] = const []; // mark in-flight to avoid dup
+    reader.type.comicSource!.loadComicPages!(reader.cid, eid).then((res) {
+      if (res.error || !mounted) return;
+      _prefetchedChapters[ch] = res.data;
+      // Pre-download the first few images of the prefetched chapter so that
+      // switching to it is seamless (legado keeps prev/next in memory).
+      int n = math.min(res.data.length, preCacheCount);
+      for (int i = 0; i < n; i++) {
+        var key = res.data[i];
+        if (key.startsWith("file://")) continue;
+        ImageDownloader.loadComicImage(
+            key, reader.type.comicSource?.key, reader.cid, eid);
+      }
+    });
+  }
+
+  /// Prefetch both neighbors of the current spliced window's edges.
+  void _prefetchNeighbors() {
+    _prefetchChapter(_spliced.firstChapterNum - 1);
+    _prefetchChapter(_spliced.lastChapterNum + 1);
+  }
+
   /// ── Scroll direction aware preloading ──
   int? _lastGpForDirection;
   bool _scrollingForward = true;
@@ -774,16 +835,10 @@ class _ContinuousModeState extends State<_ContinuousMode>
   /// Delegated to SplicedChapters.unloadExcess().
   /// cached[] markers for removed range are cleaned up here.
 
-  bool prepareToPrevChapter = false;
-  bool prepareToNextChapter = false;
-  bool jumpToNextChapter = false;
-  bool jumpToPrevChapter = false;
-
-  /// True after a chapter jump (toChapter) to suppress prepend until user
-  /// actively scrolls up.
+  /// True after a chapter jump (toChapter) or prepend to suppress prepend
+  /// triggering during the jumpTo transition frames. Cleared after a fixed
+  /// delay window (legado-style: no async listener reverse-calc).
   bool _suppressPrepend = false;
-  double? _lastScrollPos;
-  bool _userScrolledUp = false;
   void delayedSetIsScrolling(bool value) {
     Future.delayed(
       const Duration(milliseconds: 300),
@@ -796,10 +851,22 @@ class _ContinuousModeState extends State<_ContinuousMode>
   }
 
   void _updateReaderStateForSpliced(int globalPage) {
-    var (int chap, int localPage, _) = _spliced.chapterOfPage(globalPage);
-    if (reader.chapter != chap) {
-      reader.chapter = chap;
-      reader.images = _spliced.imagesForChapter(chap);
+    var (int chap, int localPage, int chapLen) = _spliced.chapterOfPage(globalPage);
+    reader._dbg('[DBG] _updateReaderStateForSpliced IN gp=$globalPage -> chap=$chap localPage=$localPage chapLen=$chapLen curChapter=${reader.chapter} suppress=$_suppressPrepend append=${_spliced.appendingNext} prepend=${_spliced.prependingPrev}');
+    // 拼接过渡/跳转过渡期间不更新 chapter（避免过渡帧反算错误导致回跳），
+    // 只更新 page。legado 式：章节由显式切章持有，不靠 listener 反算。
+    if (reader.chapter != chap &&
+        !_spliced.prependingPrev &&
+        !_spliced.appendingNext &&
+        !_suppressPrepend) {
+      // 滞后（hysteresis）：只在 gp 明确进入目标章中段（非边界页）时才切章，
+      // 避免边界页归属抖动导致章节号反复回跳（legado 用连续 pageOffset 无此问题）。
+      bool onBoundary = localPage <= 0 || localPage >= chapLen - 1;
+      if (!onBoundary) {
+        reader._dbg('[DBG] _updateReaderStateForSpliced chapter changed: ${reader.chapter} -> $chap, reader.images reassigned to ch$chap images');
+        reader.chapter = chap;
+        reader.images = _spliced.imagesForChapter(chap);
+      }
     }
     if (reader.page != localPage) {
       reader.setPage(localPage);
@@ -815,9 +882,11 @@ class _ContinuousModeState extends State<_ContinuousMode>
   }
 
   Future<void> _appendNextChapter() async {
+    reader._dbg('[DBG] _appendNextChapter ENTER appendingNext=${_spliced.appendingNext} allNextLoaded=${_spliced.allNextLoaded} mounted=$mounted lastCh=${_spliced.lastChapterNum}');
     if (_spliced.appendingNext || _spliced.allNextLoaded || !mounted) return;
     if (_spliced.lastChapterNum >= reader.maxChapter) {
       _spliced.markAllNextLoaded();
+      reader._dbg('[DBG] _appendNextChapter lastChapter>=maxChapter, markAllNextLoaded');
       return;
     }
     _spliced.markAppending(true);
@@ -826,18 +895,33 @@ class _ContinuousModeState extends State<_ContinuousMode>
     if (eid.isEmpty) {
       _spliced.markAppending(false);
       _spliced.markAllNextLoaded();
+      reader._dbg('[DBG] _appendNextChapter eid empty');
       return;
     }
-    var res = await reader.type.comicSource!.loadComicPages!(reader.cid, eid);
-    if (!mounted) return;
-    if (res.error) {
-      _spliced.markAppending(false);
-      return;
+    // Legado-style: use prefetched page list if available (instant append),
+    // otherwise fetch from network.
+    List<String> pages;
+    if (_prefetchedChapters.containsKey(nextCh) && _prefetchedChapters[nextCh]!.isNotEmpty) {
+      pages = _prefetchedChapters[nextCh]!;
+      reader._dbg('[DBG] _appendNextChapter using prefetched ch$nextCh (${pages.length} pages)');
+    } else {
+      var res = await reader.type.comicSource!.loadComicPages!(reader.cid, eid);
+      if (!mounted) return;
+      if (res.error) {
+        _spliced.markAppending(false);
+        reader._dbg('[DBG] _appendNextChapter loadComicPages ERROR ${res.errorMessage}');
+        return;
+      }
+      pages = res.data;
     }
     setState(() {
-      _spliced.append(res.data, nextCh);
+      reader._dbg('[DBG] _appendNextChapter BEFORE setState itemCount=${_spliced.length}');
+      _spliced.append(pages, nextCh);
       _spliced.markAppending(false);
+      reader._dbg('[DBG] _appendNextChapter AFTER splice itemCount=${_spliced.length} offsets=${_spliced._offsets}');
     });
+    reader._dbg('[DBG] _appendNextChapter DONE appendedCh=$nextCh splicedLen=${_spliced.length}');
+    _prefetchNeighbors(); // legado: keep next chapter ready for seamless switch
     _growCache(_spliced.length + 16);
     var removed = _spliced.unloadExcess();
     if (removed > 0 && cached.length > removed) {
@@ -846,9 +930,13 @@ class _ContinuousModeState extends State<_ContinuousMode>
   }
 
   Future<void> _prependPrevChapter() async {
+    // 读触发时的视口中心 gp（入口同步读，await 期间用户可能滚动，不能用之后的 gp）
+    int oldGp = _currentCenterGp();
+    reader._dbg('[DBG] _prependPrevChapter ENTER prependingPrev=${_spliced.prependingPrev} allPrevLoaded=${_spliced.allPrevLoaded} mounted=$mounted firstCh=${_spliced.firstChapterNum} oldGp=$oldGp');
     if (_spliced.prependingPrev || _spliced.allPrevLoaded || !mounted) return;
     if (_spliced.firstChapterNum <= 1) {
       _spliced.markAllPrevLoaded();
+      reader._dbg('[DBG] _prependPrevChapter firstCh<=1, markAllPrevLoaded');
       return;
     }
     _spliced.markPrepending(true);
@@ -857,20 +945,47 @@ class _ContinuousModeState extends State<_ContinuousMode>
     if (eid.isEmpty) {
       _spliced.markPrepending(false);
       _spliced.markAllPrevLoaded();
+      reader._dbg('[DBG] _prependPrevChapter eid empty');
       return;
     }
-    var res = await reader.type.comicSource!.loadComicPages!(reader.cid, eid);
-    if (!mounted) return;
-    if (res.error) {
-      _spliced.markPrepending(false);
-      return;
+    // Legado-style: use prefetched page list if available (instant prepend),
+    // otherwise fetch from network.
+    List<String> pages;
+    if (_prefetchedChapters.containsKey(prevCh) && _prefetchedChapters[prevCh]!.isNotEmpty) {
+      pages = _prefetchedChapters[prevCh]!;
+      reader._dbg('[DBG] _prependPrevChapter using prefetched ch$prevCh (${pages.length} pages)');
+    } else {
+      var res = await reader.type.comicSource!.loadComicPages!(reader.cid, eid);
+      if (!mounted) return;
+      if (res.error) {
+        _spliced.markPrepending(false);
+        reader._dbg('[DBG] _prependPrevChapter loadComicPages ERROR ${res.errorMessage}');
+        return;
+      }
+      pages = res.data;
     }
-    int plen = _spliced.prepend(res.data, prevCh);
+    int plen = _spliced.prepend(pages, prevCh);
+    // 显式设置 reader.chapter（对应 legado moveToPrevChapter 显式切章，不靠 listener 反算）
+    reader.chapter = prevCh;
+    reader.images = _spliced.imagesForChapter(prevCh);
     setState(() {
       _spliced.markPrepending(false);
     });
+    // legado 式：prepend 完成后屏蔽后续 prepend 触发，固定延时窗口解除。
+    // 防止 jumpTo 过渡帧（ScrollablePositionedList 当帧报旧 gp）连锁触发。
+    _suppressPrepend = true;
+    _prefetchNeighbors(); // legado: keep prev chapter ready for seamless switch
+    reader._dbg('[DBG] _prependPrevChapter DONE prependedCh=$prevCh plen=$plen splicedLen=${_spliced.length} oldGp=$oldGp');
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) itemScrollController.jumpTo(index: plen);
+      if (mounted) {
+        int target = oldGp + plen;
+        reader._dbg('[DBG] _prependPrevChapter postFrame jumpTo index=$target (oldGp=$oldGp plen=$plen)');
+        _scrollController.jumpTo(target * _itemSize);
+        // jumpTo 过渡帧（约 2-3 帧）后解除屏蔽，期间不会连锁触发
+        Future.delayed(const Duration(milliseconds: 250), () {
+          if (mounted) _suppressPrepend = false;
+        });
+      }
     });
     _growCache(_spliced.length + 16);
     _spliced.unloadExcess();
@@ -890,7 +1005,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
   void initState() {
     reader = context.reader;
     reader._imageViewController = this;
-    itemPositionsListener.itemPositions.addListener(onPositionChanged);
+    _scrollController.addListener(_syncReaderState);
     // Only reset now if images are already available (e.g. preloaded before
     // entering the reader). Otherwise onChapterLoaded() will reset after the
     // async load completes — avoids reading a null images list.
@@ -898,16 +1013,33 @@ class _ContinuousModeState extends State<_ContinuousMode>
       _resetSplicedState();
       _cachedSize = _spliced.length + 16;
       cached = List.filled(_cachedSize, false);
-    } else {
     }
     // Suppress prepend on fresh init (covers chapter jump via toChapter)
     _suppressPrepend = true;
-    _userScrolledUp = false;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _itemSize > 0) {
+        _scrollController.jumpTo(reader.page * _itemSize);
+      }
+    });
     Future.delayed(
       const Duration(milliseconds: 100),
       () => _cacheSplicedImages(reader.page),
     );
     super.initState();
+  }
+
+  /// Reads the global page at the viewport center synchronously.
+  int _currentCenterGp() {
+    if (_itemSize <= 0) return 1;
+    double pixels = _scrollController.position.pixels;
+    double maxScroll = _scrollController.position.maxScrollExtent;
+    int gp;
+    if (_isReversed) {
+      gp = ((maxScroll - pixels) / _itemSize).round() + 1;
+    } else {
+      gp = (pixels / _itemSize).round() + 1;
+    }
+    return gp.clamp(1, _spliced.length);
   }
 
   /// Called by the reader after a chapter switch's images are ready.
@@ -919,52 +1051,111 @@ class _ContinuousModeState extends State<_ContinuousMode>
     _cachedSize = _spliced.length + 16;
     cached = List.filled(_cachedSize, false);
     _suppressPrepend = true;
-    _userScrolledUp = false;
-    _lastScrollPos = null;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) itemScrollController.jumpTo(index: reader.page);
+      if (mounted) _scrollController.jumpTo(reader.page * _itemSize);
+      // 章节切换后延时解除屏蔽，避免 jumpTo 过渡帧连锁触发 prepend
+      Future.delayed(const Duration(milliseconds: 250), () {
+        if (mounted) _suppressPrepend = false;
+      });
+      _prefetchNeighbors(); // legado: prefetch prev/next on entry for seamless switch
     });
   }
 
   @override
   void dispose() {
-    itemPositionsListener.itemPositions.removeListener(onPositionChanged);
+    _scrollController.removeListener(_syncReaderState);
     super.dispose();
   }
 
-  void onPositionChanged() {
-    var positions = itemPositionsListener.itemPositions.value;
-    if (positions.isEmpty) return;
-    // Use the item closest to the viewport center, not the top-most visible item.
-    // The top-most item may belong to the previous chapter when chapters are
-    // spliced together, which would incorrectly rewind reader.chapter.
-    ItemPosition center = positions.reduce((a, b) {
-      double aCenter = (a.itemLeadingEdge + a.itemTrailingEdge) / 2;
-      double bCenter = (b.itemLeadingEdge + b.itemTrailingEdge) / 2;
-      return (aCenter - 0.5).abs() <= (bCenter - 0.5).abs() ? a : b;
-    });
-    int gp = center.index;
+  /// 上一帧 gp，用于检测 gp 突变（无滚动时大跳 = 回退根因线索）
+  int _lastSyncedGp = -1;
+
+  Widget _buildSplicedItem(BuildContext context, int index) {
+        if (index == 0 || index == _spliced.length + 1) {
+          return const SizedBox();
+        }
+        int imageIndex = index - 1;
+        String imageKey = _spliced[imageIndex];
+        String eid = _eidForPage(index);
+
+        ImageProvider image = ReaderImageProvider(
+          imageKey,
+          reader.type.comicSource?.key,
+          reader.cid,
+          eid,
+          index,
+          enableResize: true,
+        );
+
+        // 固定 item 尺寸 = 屏幕尺寸，不随图片加载变化高度，避免
+        // ScrollablePositionedList 因 item 高度跳变导致滚动位置错位（回退）。
+        // 图片用 BoxFit.contain 在固定框内居中显示（legado 式稳定布局）。
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            final screen = MediaQuery.of(context);
+            double? width, height;
+            if (reader.mode == ReaderMode.continuousLeftToRight ||
+                reader.mode == ReaderMode.continuousRightToLeft) {
+              height = screen.size.height;
+              width = screen.size.width;
+            } else {
+              width = screen.size.width;
+              height = screen.size.height;
+            }
+            // 用 SizedBox 强制固定 item 尺寸，避免 ComicImage 内部 RawImage 的
+            // intrinsic size 影响 ScrollablePositionedList 对 item 高度的测量，
+            // 从而防止图片加载完成后列表重测导致滚动位置归零（回退）。
+            return SizedBox(
+              width: width,
+              height: height,
+              child: ColoredBox(
+                color: context.colorScheme.surface,
+                child: ComicImage(
+                  key: ValueKey(imageKey),
+                  gaplessPlayback: true,
+                  filterQuality: FilterQuality.medium,
+                  image: image,
+                  width: width,
+                  height: height,
+                  fit: BoxFit.contain,
+                  onInit: (state) {
+                    reader._dbg('[DBG] ComicImage onInit idx=$index key=$imageKey');
+                    imageStates.add(state);
+                  },
+                  onDispose: (state) {
+                    reader._dbg('[DBG] ComicImage onDispose idx=$index key=$imageKey');
+                    imageStates.remove(state);
+                  },
+                ),
+              ),
+            );
+          },
+        );
+  }
+
+  void _syncReaderState() {
+    if (_itemSize <= 0) return;
+    // legado 式：用连续滚动像素算 gp，不依赖 item index（item 重建时
+    // index 会乱跳导致回退）。item 尺寸固定(_itemSize)，pixels 稳定对应内容。
+    // 自有 ScrollController 的 pixels 不受 ListView item 重建影响，不会归零。
+    double pixels = _scrollController.position.pixels;
+    double maxScroll = _scrollController.position.maxScrollExtent;
+    int gp;
+    if (_isReversed) {
+      // reverse 模式：pixels=0 对应最右端(列表末尾), pixels=max 对应开头
+      gp = ((maxScroll - pixels) / _itemSize).round() + 1;
+    } else {
+      gp = (pixels / _itemSize).round() + 1;
+    }
     gp = gp.clamp(1, _spliced.length);
+    String flag = '';
+    if (_lastSyncedGp >= 0 && (gp - _lastSyncedGp).abs() > 3 && !_spliced.appendingNext && !_spliced.prependingPrev && !_suppressPrepend) {
+      flag = ' <<< GP JUMP (delta=${gp - _lastSyncedGp}, no splice active)';
+    }
+    _lastSyncedGp = gp;
+    reader._dbg('[DBG] _syncReaderState gp=$gp chapter=${reader.chapter} pixels=$pixels itemCount=${_spliced.length} maxScroll=$maxScroll reversed=$_isReversed itemSize=$_itemSize$flag');
     _updateReaderStateForSpliced(gp);
     _cacheSplicedImages(gp);
-    if (_spliced.shouldAppendNext(gp)) {
-      _appendNextChapter();
-    }
-    // Detect user scrolling up: if gp decreased since last check, mark user intent
-    if (_suppressPrepend) {
-      if (_lastScrollPos == null) {
-        _lastScrollPos = gp.toDouble();
-      } else if (gp < _lastScrollPos! - 1) {
-        _userScrolledUp = true;
-      }
-      if (_userScrolledUp) {
-        _suppressPrepend = false;
-      }
-      _lastScrollPos = gp.toDouble();
-    }
-    if (_spliced.shouldPrependPrev(gp, _suppressPrepend)) {
-      _prependPrevChapter();
-    }
   }
 
   void _cacheSplicedImages(int cp) {
@@ -1021,7 +1212,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
     if (HardwareKeyboard.instance.isShiftPressed) {
       return;
     }
-    var currentLocation = scrollController.position.pixels;
+    var currentLocation = _scrollController.position.pixels;
     var old = _futurePosition;
     _futurePosition ??= currentLocation;
     double k = (_futurePosition! - currentLocation).abs() / 1600 + 1;
@@ -1036,8 +1227,8 @@ class _ContinuousModeState extends State<_ContinuousMode>
     _futurePosition = _futurePosition! + offset * k;
     var beforeOffset = (_futurePosition! - currentLocation).abs();
     _futurePosition = _futurePosition!.clamp(
-      scrollController.position.minScrollExtent,
-      scrollController.position.maxScrollExtent,
+      _scrollController.position.minScrollExtent,
+      _scrollController.position.maxScrollExtent,
     );
     var afterOffset = (_futurePosition! - currentLocation).abs();
     if (_futurePosition == old) return;
@@ -1049,10 +1240,10 @@ class _ContinuousModeState extends State<_ContinuousMode>
         duration = Duration(milliseconds: 10);
       }
     }
-    scrollController
+    _scrollController
         .animateTo(_futurePosition!, duration: duration, curve: Curves.linear)
         .then((_) {
-          var current = scrollController.position.pixels;
+          var current = _scrollController.position.pixels;
           if (current == target && current == _futurePosition) {
             _futurePosition = null;
           }
@@ -1074,23 +1265,13 @@ class _ContinuousModeState extends State<_ContinuousMode>
   }
 
   void onScroll() {
-    if (prepareToPrevChapter) {
-      jumpToNextChapter = false;
-      jumpToPrevChapter = true;
-    } else if (prepareToNextChapter) {
-      jumpToNextChapter = true;
-      jumpToPrevChapter = false;
-    }
+    var pixels = _scrollController?.position.pixels;
+    var min = _scrollController?.position.minScrollExtent;
+    var max = _scrollController?.position.maxScrollExtent;
+    reader._dbg('[DBG] onScroll pixels=$pixels min=$min max=$max itemCount=${_spliced.length}');
   }
 
   bool onScaleUpdate([double? scale]) {
-    if (prepareToNextChapter || prepareToPrevChapter) {
-      setState(() {
-        prepareToPrevChapter = false;
-        prepareToNextChapter = false;
-      });
-      context.readerScaffold.setFloatingButton(0);
-    }
     var isZoomedIn = (scale ?? photoViewController.scale) != 1.0;
     if (isZoomedIn != this.isZoomedIn) {
       setState(() {
@@ -1102,70 +1283,25 @@ class _ContinuousModeState extends State<_ContinuousMode>
 
   @override
   Widget build(BuildContext context) {
-    Widget widget = ScrollablePositionedList.builder(
-      initialScrollIndex: reader.page.clamp(1, _spliced.length),
-      itemScrollController: itemScrollController,
-      itemPositionsListener: itemPositionsListener,
-      scrollControllerCallback: (scrollController) {
-        if (_scrollController != null) {
-          _scrollController!.removeListener(onScroll);
-        }
-        _scrollController = scrollController;
-        _scrollController!.addListener(onScroll);
-      },
+    reader._dbg('[DBG] BUILD called spliceLen=${_spliced.length} readerPage=${reader.page} readerChapter=${reader.chapter}');
+    final screen = MediaQuery.of(context);
+    bool horizontal = reader.mode != ReaderMode.continuousTopToBottom;
+    _itemSize = horizontal ? screen.size.width : screen.size.height;
+    _isReversed = reader.mode == ReaderMode.continuousRightToLeft;
+    Widget widget = ListView.builder(
+      key: _listKey,
+      controller: _scrollController,
       itemCount: _spliced.length + 2,
       addSemanticIndexes: false,
       scrollDirection: reader.mode == ReaderMode.continuousTopToBottom
           ? Axis.vertical
           : Axis.horizontal,
       reverse: reader.mode == ReaderMode.continuousRightToLeft,
-      physics: isCTRLPressed || _isMouseScrolling || disableScroll
-          ? const NeverScrollableScrollPhysics()
-          : isZoomedIn
-          ? const ClampingScrollPhysics()
-          : const BouncingScrollPhysics(),
-      itemBuilder: (context, index) {
-        if (index == 0 || index == _spliced.length + 1) {
-          return const SizedBox();
-        }
-        double? width, height;
-        if (reader.mode == ReaderMode.continuousLeftToRight ||
-            reader.mode == ReaderMode.continuousRightToLeft) {
-          height = double.infinity;
-        } else {
-          width = double.infinity;
-        }
-
-        int imageIndex = index - 1;
-        String imageKey = _spliced[imageIndex];
-        String eid = _eidForPage(index);
-
-        ImageProvider image = ReaderImageProvider(
-          imageKey,
-          reader.type.comicSource?.key,
-          reader.cid,
-          eid,
-          index,
-          enableResize: true,
-        );
-
-        return ColoredBox(
-          color: context.colorScheme.surface,
-          child: ComicImage(
-            filterQuality: FilterQuality.medium,
-            image: image,
-            width: width,
-            height: height,
-            fit: BoxFit.contain,
-            onInit: (state) => imageStates.add(state),
-            onDispose: (state) => imageStates.remove(state),
-          ),
-        );
-      },
-      scrollBehavior: const MaterialScrollBehavior().copyWith(
-        scrollbars: false,
-        dragDevices: _kTouchLikeDeviceTypes,
-      ),
+      // 恒定 physics：不能随 disableScroll/isZoomedIn 切换，否则 ListView
+      // 在 physics 变化时重置 ScrollController.position.pixels 到 0 → 点击回退。
+      // 缩放/禁用滚动改由手势层(photoViewController/onPointerSignal)处理。
+      physics: const BouncingScrollPhysics(),
+      itemBuilder: _buildSplicedItem,
     );
 
     widget = Stack(
@@ -1177,6 +1313,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
 
     widget = Listener(
       onPointerDown: (event) {
+        reader._dbg('[DBG] onPointerDown fingers=$fingers');
         fingers++;
         if (fingers > 1 && !disableScroll) {
           setState(() {
@@ -1192,19 +1329,11 @@ class _ContinuousModeState extends State<_ContinuousMode>
       },
       onPointerUp: (event) {
         fingers--;
+        reader._dbg('[DBG] onPointerUp fingers=$fingers');
         if (fingers <= 1 && disableScroll) {
           setState(() {
             disableScroll = false;
           });
-        }
-        if (fingers == 0) {
-          if (jumpToPrevChapter) {
-            context.readerScaffold.setFloatingButton(0);
-            reader.toPrevChapter(toLastPage: true);
-          } else if (jumpToNextChapter) {
-            context.readerScaffold.setFloatingButton(0);
-            reader.toNextChapter();
-          }
         }
       },
       onPointerCancel: (event) {
@@ -1226,7 +1355,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
           return;
         }
         Offset offset;
-        var sp = scrollController.position;
+        var sp = _scrollController.position;
         if (sp.pixels <= sp.minScrollExtent ||
             sp.pixels >= sp.maxScrollExtent) {
           offset = Offset(value.dx, value.dy);
@@ -1260,38 +1389,21 @@ class _ContinuousModeState extends State<_ContinuousMode>
 
         if (notification is ScrollUpdateNotification &&
             (scale - 1).abs() < 0.05) {
-          if (!scrollController.hasClients) return false;
-          if (scrollController.position.pixels >=
-                  scrollController.position.maxScrollExtent) {
+          if (!_scrollController.hasClients) return false;
+          if (_scrollController.position.pixels >=
+                  _scrollController.position.maxScrollExtent) {
+            reader._dbg('[DBG] scrollNotify MAX pixels=${_scrollController.position.pixels} max=${_scrollController.position.maxScrollExtent} allNextLoaded=${_spliced.allNextLoaded} appendingNext=${_spliced.appendingNext}');
             if (!_spliced.allNextLoaded && !_spliced.appendingNext) {
               _appendNextChapter();
             }
-          } else if (scrollController.position.pixels <=
-                  scrollController.position.minScrollExtent) {
+          } else if (_scrollController.position.pixels <=
+                  _scrollController.position.minScrollExtent) {
+            reader._dbg('[DBG] scrollNotify MIN pixels=${_scrollController.position.pixels} min=${_scrollController.position.minScrollExtent} allPrevLoaded=${_spliced.allPrevLoaded} prependingPrev=${_spliced.prependingPrev} suppressPrepend=$_suppressPrepend');
             if (!_spliced.allPrevLoaded && !_spliced.prependingPrev) {
               _prependPrevChapter();
-            } else if (_spliced.allPrevLoaded &&
-                !reader.isFirstChapterOfGroup &&
-                !_suppressPrepend) {
-              if (!prepareToPrevChapter) {
-                jumpToPrevChapter = true;
-                jumpToNextChapter = false;
-                context.readerScaffold.setFloatingButton(-1);
-                setState(() { prepareToPrevChapter = true; });
-              } else {
-                jumpToPrevChapter = true;
-              }
             }
           } else {
             context.readerScaffold.setFloatingButton(0);
-            if (prepareToPrevChapter || prepareToNextChapter) {
-              jumpToPrevChapter = false;
-              jumpToNextChapter = false;
-              setState(() {
-                prepareToPrevChapter = false;
-                prepareToNextChapter = false;
-              });
-            }
           }
         }
 
@@ -1320,33 +1432,23 @@ class _ContinuousModeState extends State<_ContinuousMode>
   }
 
   Widget buildBackground(BuildContext context) {
-    return Column(
-      children: [
-        SizedBox(height: context.padding.top + 16),
-        if (prepareToPrevChapter)
-          _SwipeChangeChapterProgress(
-            controller: scrollController,
-            isPrev: true,
-          ),
-        const Spacer(),
-        if (prepareToNextChapter)
-          _SwipeChangeChapterProgress(
-            controller: scrollController,
-            isPrev: false,
-          ),
-        SizedBox(height: 36),
-      ],
-    );
+    return const SizedBox.shrink();
   }
 
   @override
   Future<void> animateToPage(int page) {
-    return itemScrollController.scrollTo(
-      index: page,
+    int gp = _spliced.globalGpForChapterPage(reader.chapter, page);
+    return _scrollController.animateTo(
+      gp * _itemSize,
       duration: const Duration(milliseconds: 200),
       curve: Curves.ease,
     );
   }
+
+  /// 把章节内 page(1-based) 转成拼接列表的全局 gp。
+  /// 连续模式多章拼接后，滚动位置是全局的，不能直接用章节内 page。
+  int _globalGpForChapterPage(int chapter, int page) =>
+      _spliced.globalGpForChapterPage(chapter, page);
 
   @override
   void handleDoubleTap(Offset location) {
@@ -1403,7 +1505,8 @@ class _ContinuousModeState extends State<_ContinuousMode>
 
   @override
   void toPage(int page) {
-    itemScrollController.jumpTo(index: page);
+    int gp = _globalGpForChapterPage(reader.chapter, page);
+    _scrollController.jumpTo(gp * _itemSize);
     _futurePosition = null;
   }
 
@@ -1443,14 +1546,14 @@ class _ContinuousModeState extends State<_ContinuousMode>
       forward = false;
     }
     if (forward == true) {
-      scrollController.animateTo(
-        scrollController.offset + context.height * 0.25,
+      _scrollController.animateTo(
+        _scrollController.offset + context.height * 0.25,
         duration: const Duration(milliseconds: 200),
         curve: Curves.ease,
       );
     } else if (forward == false) {
-      scrollController.animateTo(
-        scrollController.offset - context.height * 0.25,
+      _scrollController.animateTo(
+        _scrollController.offset - context.height * 0.25,
         duration: const Duration(milliseconds: 200),
         curve: Curves.ease,
       );
@@ -1539,139 +1642,4 @@ void _preDownloadImage(int page, BuildContext context) {
   ImageDownloader.loadComicImage(imageKey, sourceKey, cid, eid);
 }
 
-class _SwipeChangeChapterProgress extends StatefulWidget {
-  const _SwipeChangeChapterProgress({this.controller, required this.isPrev});
 
-  final ScrollController? controller;
-
-  final bool isPrev;
-
-  @override
-  State<_SwipeChangeChapterProgress> createState() =>
-      _SwipeChangeChapterProgressState();
-}
-
-class _SwipeChangeChapterProgressState
-    extends State<_SwipeChangeChapterProgress> {
-  double value = 0;
-
-  late final isPrev = widget.isPrev;
-
-  ScrollController? controller;
-
-  @override
-  void initState() {
-    super.initState();
-    if (widget.controller != null) {
-      controller = widget.controller;
-      controller!.addListener(onScroll);
-    }
-  }
-
-  @override
-  void didUpdateWidget(covariant _SwipeChangeChapterProgress oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.controller != widget.controller) {
-      controller?.removeListener(onScroll);
-      controller = widget.controller;
-      controller?.addListener(onScroll);
-      if (value != 0) {
-        setState(() {
-          value = 0;
-        });
-      }
-    }
-  }
-
-  @override
-  void dispose() {
-    super.dispose();
-    controller?.removeListener(onScroll);
-  }
-
-  void onScroll() {
-    var position = controller!.position.pixels;
-    var offset = isPrev
-        ? controller!.position.minScrollExtent - position
-        : position - controller!.position.maxScrollExtent;
-    var newValue = offset / _kChangeChapterOffset;
-    newValue = newValue.clamp(0.0, 1.0);
-    if (newValue != value) {
-      setState(() {
-        value = newValue;
-      });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final msg = widget.isPrev
-        ? "Swipe down for previous chapter".tl
-        : "Swipe up for next chapter".tl;
-
-    return CustomPaint(
-      painter: _ProgressPainter(
-        value: value,
-        backgroundColor: context.colorScheme.surfaceContainerLow,
-        color: context.colorScheme.surfaceContainerHighest,
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            widget.isPrev ? Icons.arrow_downward : Icons.arrow_upward,
-            color: context.colorScheme.onSurface,
-            size: 16,
-          ),
-          const SizedBox(width: 4),
-          Text(msg),
-        ],
-      ).paddingVertical(6).paddingHorizontal(16),
-    );
-  }
-}
-
-class _ProgressPainter extends CustomPainter {
-  final double value;
-
-  final Color backgroundColor;
-
-  final Color color;
-
-  const _ProgressPainter({
-    required this.value,
-    required this.backgroundColor,
-    required this.color,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = backgroundColor
-      ..style = PaintingStyle.fill;
-    canvas.drawRRect(
-      RRect.fromLTRBR(0, 0, size.width, size.height, Radius.circular(16)),
-      paint,
-    );
-
-    paint.color = color;
-    canvas.drawRRect(
-      RRect.fromLTRBR(
-        0,
-        0,
-        size.width * value,
-        size.height,
-        Radius.circular(16),
-      ),
-      paint,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) {
-    return oldDelegate is! _ProgressPainter ||
-        oldDelegate.value != value ||
-        oldDelegate.backgroundColor != backgroundColor ||
-        oldDelegate.color != color;
-  }
-}

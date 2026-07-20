@@ -641,6 +641,16 @@ abstract mixin class _ReaderLocation {
 
   void update();
 
+  /// Debug logger writing to reader_dbg.log (relative to exe cwd). Temporary.
+  void _dbg(String s) {
+    try {
+      File('reader_dbg.log').writeAsStringSync(
+        '${DateTime.now().toIso8601String()} $s\n',
+        mode: FileMode.append,
+      );
+    } catch (_) {}
+  }
+
   bool enablePageAnimation(String cid, ComicType type) => appdata.settings
       .getReaderSetting(cid, type.sourceKey, 'enablePageAnimation');
 
@@ -722,6 +732,7 @@ abstract mixin class _ReaderLocation {
   /// view is notified exactly once via onChapterLoaded — no null window, no
   /// multi-place coordination). Returns true if the switch was requested.
   bool changeChapter(int c, {bool toLastPage = false}) {
+    _dbg('[DBG] changeChapter CALLED c=$c toLastPage=$toLastPage currentChapter=$chapter isLoading=$isLoading');
     if (!_validateChapter(c) || isLoading) return false;
     chapter = c;
     page = 1;
