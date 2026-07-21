@@ -27,6 +27,7 @@ class ComicImage extends StatefulWidget {
     this.onInit,
     this.onDispose,
     this.onImageLoaded,
+    this.placeholderHeight = 300.0,
   })  : image = ResizeImage.resizeIfNeeded(cacheWidth, cacheHeight, image),
         assert(cacheWidth == null || cacheWidth > 0),
         assert(cacheHeight == null || cacheHeight > 0);
@@ -70,6 +71,10 @@ class ComicImage extends StatefulWidget {
   /// Called once the image is decoded, with the raw image dimensions.
   /// The parent uses this for per-page scroll-offset math.
   final void Function(int width, int height)? onImageLoaded;
+
+  /// 图片加载前的占位高度/宽度（沿滚动轴方向），与 legado MATCH_PARENT 对应。
+  /// 默认 300，对齐 legado 后由父级传入视口高，加载后 item 缩小到图片真实高。
+  final double placeholderHeight;
 
   static void clear() => _ComicImageState.clear();
 
@@ -364,10 +369,10 @@ class _ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
       } else {
         if (width == double.infinity) {
           width = constrains.maxWidth;
-          height = 300;
+          height = widget.placeholderHeight;
         } else if (height == double.infinity) {
           height = constrains.maxHeight;
-          width = 300;
+          width = widget.placeholderHeight;
         }
       }
 

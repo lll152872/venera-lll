@@ -1171,6 +1171,9 @@ class _ContinuousModeState extends State<_ContinuousMode>
           width = double.infinity;
         }
 
+        final double itemPlaceholder = reader.mode == ReaderMode.continuousTopToBottom
+            ? reader.size.height
+            : reader.size.width;
         return ColoredBox(
           color: context.colorScheme.surface,
           child: ComicImage(
@@ -1181,36 +1184,21 @@ class _ContinuousModeState extends State<_ContinuousMode>
             width: width,
             height: height,
             fit: BoxFit.contain,
+            placeholderHeight: itemPlaceholder, // legado 式：初始 = MATCH_PARENT(视口高)
             onInit: (state) {
               reader._dbg('[DBG] ComicImage onInit idx=$index key=$imageKey');
               imageStates.add(state);
             },
+            // legado 式：不补偿。图片加载后 item 从视口高缩小到真实高，后续上移无间隙。
             onImageLoaded: (imgW, imgH) {
-              // 按实际视口宽算真实显示高（readSize.width 与 cell 约束一致，
-              // 除非 limitImageWidth 启用，但用户反馈该选项无区别）。
               final bool horizontal = reader.mode != ReaderMode.continuousTopToBottom;
               final double cellSize = horizontal ? reader.size.height : reader.size.width;
               final double h = horizontal
-                  ? cellSize * imgW / imgH  // 横向：真实宽 = 视口高 * 图宽/图高
-                  : cellSize * imgH / imgW; // 纵向：真实高 = 视口宽 * 图高/图宽
+                  ? cellSize * imgW / imgH
+                  : cellSize * imgH / imgW;
               if ((_pageHeights[index] ?? -1) != h) {
-                // ⚠️ 先捕获 beforeOffset 再更新 _pageHeights，
-                // 否则 beforeOffset 已含新高度 → Δ=0 → 补偿永不执行。
-                final double beforeChange = _scrollController.position.pixels;
-                final int beforeGp = _currentCenterGp();
-                final double beforeOffset = _offsetForGp(beforeGp);
                 _pageHeights[index] = h;
                 setState(() {});
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (!mounted) return;
-                  final double afterOffset = _offsetForGp(beforeGp);
-                  final double target = beforeChange + (afterOffset - beforeOffset);
-                  // clamp 安全：maxScrollExtent 可能因未加载的占位 300px 而偏小。
-                  _scrollController.jumpTo(target.clamp(
-                    _scrollController.position.minScrollExtent,
-                    _scrollController.position.maxScrollExtent,
-                  ));
-                });
               }
             },
             onDispose: (state) {
@@ -1370,10 +1358,11 @@ class _ContinuousModeState extends State<_ContinuousMode>
   @override
   Widget build(BuildContext context) {
     reader._dbg('[DBG] BUILD called spliceLen=${_spliced.length} readerPage=${reader.page} readerChapter=${reader.chapter}');
-    // 占位高度：必须与 ComicImage 内部 LayoutBuilder 的未加载 fallback 一致
-    //（comic_image.dart:367 "height = 300"），否则完全加载前 _offsetForGp
-    // 用全屏高 ~2000px 累加，但 ListView 实际 item 只有 300px，偏移数学全错。
-    _placeholderPageHeight = 300.0;
+    // legado 式：每页初始高度 = 视口高（对应 MATCH_PARENT），
+    // 图片加载后缩小到图片真实高，内容上移 → 无间隙。
+    _placeholderPageHeight = reader.mode == ReaderMode.continuousTopToBottom
+        ? reader.size.height
+        : reader.size.width;
     _isReversed = reader.mode == ReaderMode.continuousRightToLeft;
     Widget widget = ListView.builder(
       key: _listKey,
