@@ -778,6 +778,11 @@ class _ContinuousModeState extends State<_ContinuousMode>
   final Map<int, double> _pageHeights = {};
   double _placeholderPageHeight = 0; // 首帧占位（build 时赋视口高）
 
+  /// 实际布局用的 cross-axis 尺寸（垂直模式=宽，水平模式=高）。
+  /// 与 _placeholderPageHeight / _pageHeights 联合使用确保 item 渲染高度
+  /// 和 _pageHeights 存储值源于同一宽度，消除双轨不一致导致的页间空白。
+  double _layoutCrossAxis = 0;
+
   bool _isReversed = false;
 
   /// ── Download concurrency limiter ──
@@ -1159,10 +1164,6 @@ class _ContinuousModeState extends State<_ContinuousMode>
           enableResize: true,
         );
 
-        // 用 double.infinity 让 item 撑满 ListView 给的真实视口约束，
-        // 而不是写死 MediaQuery.size。写死会在手机端(有系统栏/safe area，
-        // 真实视口 < MediaQuery.size)导致每页比可用空间高、底部溢出黑边。
-        // 与重构前 ScrollablePositionedList 时代的策略一致。
         double? width, height;
         if (reader.mode == ReaderMode.continuousLeftToRight ||
             reader.mode == ReaderMode.continuousRightToLeft) {
@@ -1184,15 +1185,14 @@ class _ContinuousModeState extends State<_ContinuousMode>
             width: width,
             height: height,
             fit: BoxFit.contain,
-            placeholderHeight: itemPlaceholder, // legado 式：初始 = MATCH_PARENT(视口高)
+            placeholderHeight: itemPlaceholder,
             onInit: (state) {
               reader._dbg('[DBG] ComicImage onInit idx=$index key=$imageKey');
               imageStates.add(state);
             },
-            // legado 式：不补偿。图片加载后 item 从视口高缩小到真实高，后续上移无间隙。
             onImageLoaded: (imgW, imgH) {
               final bool horizontal = reader.mode != ReaderMode.continuousTopToBottom;
-              final double cellSize = horizontal ? reader.size.height : reader.size.width;
+              final double cellSize = horizontal ? reader.size.height : _layoutCrossAxis;
               final double h = horizontal
                   ? cellSize * imgW / imgH
                   : cellSize * imgH / imgW;
@@ -1494,6 +1494,9 @@ class _ContinuousModeState extends State<_ContinuousMode>
         reader.mode == ReaderMode.continuousTopToBottom) {
       width = height * 0.7;
     }
+    _layoutCrossAxis = reader.mode == ReaderMode.continuousTopToBottom
+        ? width
+        : height;
 
     return PhotoView.customChild(
       backgroundDecoration: BoxDecoration(color: context.colorScheme.surface),
