@@ -1377,6 +1377,12 @@ class _ContinuousModeState extends State<_ContinuousMode>
       // 在 physics 变化时重置 ScrollController.position.pixels 到 0 → 点击回退。
       // 缩放/禁用滚动改由手势层(photoViewController/onPointerSignal)处理。
       physics: const BouncingScrollPhysics(),
+      // 禁用 ListView 自动消费 MediaQuery padding（手机 safe area inset）。
+      // 否则 item 的 constrains.maxWidth < _layoutCrossAxis（父约束宽），
+      // ComicImage 用 constrains.maxWidth 算渲染高 < _pageHeights 用
+      // _layoutCrossAxis 算的存储高 → 累加偏移算大 → 页间可变白间隙。
+      // 设 zero 后 item 约束宽 == 父约束宽 == _layoutCrossAxis，同源无间隙。
+      padding: EdgeInsets.zero,
       itemBuilder: _buildSplicedItem,
     );
 
