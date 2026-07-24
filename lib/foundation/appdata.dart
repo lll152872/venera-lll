@@ -294,6 +294,7 @@ class Settings with ChangeNotifier {
     'comicSourceListUrl': _defaultSourceListUrl,
     'preloadImageCount': 4,
     'followUpdatesFolder': null,
+    'pendingUpdateNotification': null, // {count: int, time: int} or null
     'initialPage': '0',
     'comicListDisplayMode': 'paging', // paging, continuous
     'showPageNumberInReader': true,

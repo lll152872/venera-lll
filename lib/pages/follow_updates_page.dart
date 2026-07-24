@@ -23,6 +23,9 @@ class _FollowUpdatesWidgetState
 
   String? get folder => appdata.settings["followUpdatesFolder"];
 
+  Map<String, dynamic>? get _pendingNotification =>
+      appdata.settings["pendingUpdateNotification"];
+
   void getCount() {
     if (folder == null) {
       _count = 0;
@@ -45,6 +48,12 @@ class _FollowUpdatesWidgetState
     });
   }
 
+  void _dismissNotification() {
+    appdata.settings["pendingUpdateNotification"] = null;
+    appdata.saveData();
+    setState(() {});
+  }
+
   @override
   void initState() {
     super.initState();
@@ -53,55 +62,131 @@ class _FollowUpdatesWidgetState
 
   @override
   Widget build(BuildContext context) {
+    var notification = _pendingNotification;
     return SliverToBoxAdapter(
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-        decoration: BoxDecoration(
-          border: Border.all(
-            color: Theme.of(context).colorScheme.outlineVariant,
-            width: 0.6,
-          ),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(8),
-          onTap: () {
-            context.to(() => FollowUpdatesPage());
-          },
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (notification != null) _buildNotificationBanner(context, notification),
+          _buildFollowUpdatesCard(context),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNotificationBanner(BuildContext context, Map<String, dynamic> notification) {
+    var count = notification['count'] as int? ?? 0;
+    var time = notification['time'] as int?;
+    String timeStr = '';
+    if (time != null) {
+      var dt = DateTime.fromMillisecondsSinceEpoch(time);
+      var now = DateTime.now();
+      var diff = now.difference(dt);
+      if (diff.inMinutes < 1) {
+        timeStr = 'Just now'.tl;
+      } else if (diff.inMinutes < 60) {
+        timeStr = '${diff.inMinutes} ${'min ago'.tl}';
+      } else if (diff.inHours < 24) {
+        timeStr = '${diff.inHours} ${'h ago'.tl}';
+      } else {
+        timeStr = '${diff.inDays} ${'d ago'.tl}';
+      }
+    }
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        color: Theme.of(context).colorScheme.primaryContainer,
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: () {
+          _dismissNotification();
+          context.to(() => FollowUpdatesPage());
+        },
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Row(
             children: [
-              SizedBox(
-                height: 56,
-                child: Row(
+              Icon(Icons.notifications_active,
+                  color: Theme.of(context).colorScheme.primary),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Center(
-                      child: Text('Follow Updates'.tl, style: ts.s18),
+                    Text(
+                      '@c updates'.tlParams({'c': count}),
+                      style: ts.s16.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
-                    const Spacer(),
-                    const Icon(Icons.arrow_right),
+                    if (timeStr.isNotEmpty)
+                      Text(timeStr, style: ts.s12),
                   ],
                 ),
-              ).paddingHorizontal(16),
-              if (_count > 0)
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
-                  margin: const EdgeInsets.only(bottom: 16, left: 16),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(8),
-                    color: Theme.of(context).colorScheme.primaryContainer,
-                  ),
-                  child: Text(
-                    '@c updates'.tlParams({
-                      'c': _count,
-                    }),
-                    style: ts.s16,
-                  ),
-                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.close, size: 20),
+                onPressed: _dismissNotification,
+                visualDensity: VisualDensity.compact,
+              ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFollowUpdatesCard(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      decoration: BoxDecoration(
+        border: Border.all(
+          color: Theme.of(context).colorScheme.outlineVariant,
+          width: 0.6,
+        ),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: () {
+          context.to(() => FollowUpdatesPage());
+        },
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              height: 56,
+              child: Row(
+                children: [
+                  Center(
+                    child: Text('Follow Updates'.tl, style: ts.s18),
+                  ),
+                  const Spacer(),
+                  const Icon(Icons.arrow_right),
+                ],
+              ),
+            ).paddingHorizontal(16),
+            if (_count > 0)
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+                margin: const EdgeInsets.only(bottom: 16, left: 16),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(8),
+                  color: Theme.of(context).colorScheme.primaryContainer,
+                ),
+                child: Text(
+                  '@c updates'.tlParams({
+                    'c': _count,
+                  }),
+                  style: ts.s16,
+                ),
+              ),
+          ],
         ),
       ),
     );
@@ -152,6 +237,11 @@ class _FollowUpdatesPageState extends AutomaticGlobalState<FollowUpdatesPage> {
   @override
   void initState() {
     super.initState();
+    // Clear the persistent notification when user views the page
+    if (appdata.settings["pendingUpdateNotification"] != null) {
+      appdata.settings["pendingUpdateNotification"] = null;
+      appdata.saveData();
+    }
     if (folder != null) {
       allComics = LocalFavoritesManager().getComicsWithUpdatesInfo(folder!);
       sortComics();
@@ -449,26 +539,98 @@ class _FollowUpdatesPageState extends AutomaticGlobalState<FollowUpdatesPage> {
 
     if (count > 0) {
       bool isCanceled = false;
-      void onCancel() {
-        isCanceled = true;
-      }
 
-      var loadingController = showLoadingDialog(
-        App.rootContext,
-        withProgress: true,
-        cancelButtonText: "Cancel".tl,
-        onCancel: onCancel,
-        message: "Updating comics...".tl,
+      final progressNotifier = ValueNotifier<UpdateProgress?>(
+        UpdateProgress(0, 0, 0, 0),
       );
+
+      var dialogRoute = DialogRoute(
+        context: App.rootContext,
+        barrierDismissible: false,
+        builder: (BuildContext context) {
+          return ContentDialog(
+            title: "Checking Updates".tl,
+            content: ValueListenableBuilder<UpdateProgress?>(
+              valueListenable: progressNotifier,
+              builder: (context, progress, _) {
+                var current = progress?.current ?? 0;
+                var total = progress?.total ?? 0;
+                var updated = progress?.updated ?? 0;
+                var errors = progress?.errors ?? 0;
+                var comicName = progress?.comic?.name;
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (comicName != null && !isCanceled)
+                      Text(
+                        comicName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: ts.s14,
+                      ).paddingVertical(4),
+                    LinearProgressIndicator(
+                      value: total > 0 ? current / total : null,
+                      backgroundColor: context.colorScheme.surfaceContainer,
+                    ).paddingVertical(8),
+                    Row(
+                      children: [
+                        Text("$current / $total", style: ts.s14),
+                        const Spacer(),
+                        if (updated > 0)
+                          Padding(
+                            padding: const EdgeInsets.only(right: 12),
+                            child: Row(
+                              children: [
+                                Icon(Icons.update, size: 16,
+                                    color: context.colorScheme.primary),
+                                const SizedBox(width: 4),
+                                Text("$updated", style: ts.s14),
+                              ],
+                            ),
+                          ),
+                        if (errors > 0)
+                          Row(
+                            children: [
+                              Icon(Icons.error_outline, size: 16,
+                                  color: context.colorScheme.error),
+                              const SizedBox(width: 4),
+                              Text("$errors", style: ts.s14),
+                            ],
+                          ),
+                      ],
+                    ),
+                  ],
+                ).paddingVertical(8);
+              },
+            ).paddingHorizontal(16),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  isCanceled = true;
+                  Navigator.of(context, rootNavigator: true).pop();
+                },
+                child: Text("Cancel".tl),
+              ),
+            ],
+          );
+        },
+      );
+
+      var navigator = Navigator.of(App.rootContext, rootNavigator: true);
+      navigator.push(dialogRoute);
 
       await for (var progress in updateFolder(folder, true)) {
         if (isCanceled) {
+          navigator.removeRoute(dialogRoute);
+          progressNotifier.dispose();
           return;
         }
-        loadingController.setProgress(progress.current / progress.total);
+        progressNotifier.value = progress;
       }
 
-      loadingController.close();
+      navigator.removeRoute(dialogRoute);
+      progressNotifier.dispose();
     }
 
     setState(() {
@@ -484,29 +646,101 @@ class _FollowUpdatesPageState extends AutomaticGlobalState<FollowUpdatesPage> {
     FollowUpdatesService._cancelChecking?.call();
 
     bool isCanceled = false;
-    void onCancel() {
-      isCanceled = true;
-    }
 
-    var loadingController = showLoadingDialog(
-      App.rootContext,
-      withProgress: true,
-      cancelButtonText: "Cancel".tl,
-      onCancel: onCancel,
-      message: "Updating comics...".tl,
+    final progressNotifier = ValueNotifier<UpdateProgress?>(
+      UpdateProgress(0, 0, 0, 0),
     );
+
+    var dialogRoute = DialogRoute(
+      context: App.rootContext,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return ContentDialog(
+          title: "Checking Updates".tl,
+          content: ValueListenableBuilder<UpdateProgress?>(
+            valueListenable: progressNotifier,
+            builder: (context, progress, _) {
+              var current = progress?.current ?? 0;
+              var total = progress?.total ?? 0;
+              var updated = progress?.updated ?? 0;
+              var errors = progress?.errors ?? 0;
+              var comicName = progress?.comic?.name;
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (comicName != null && !isCanceled)
+                    Text(
+                      comicName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: ts.s14,
+                    ).paddingVertical(4),
+                  LinearProgressIndicator(
+                    value: total > 0 ? current / total : null,
+                    backgroundColor: context.colorScheme.surfaceContainer,
+                  ).paddingVertical(8),
+                  Row(
+                    children: [
+                      Text("$current / $total", style: ts.s14),
+                      const Spacer(),
+                      if (updated > 0)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 12),
+                          child: Row(
+                            children: [
+                              Icon(Icons.update, size: 16,
+                                  color: context.colorScheme.primary),
+                              const SizedBox(width: 4),
+                              Text("$updated", style: ts.s14),
+                            ],
+                          ),
+                        ),
+                      if (errors > 0)
+                        Row(
+                          children: [
+                            Icon(Icons.error_outline, size: 16,
+                                color: context.colorScheme.error),
+                            const SizedBox(width: 4),
+                            Text("$errors", style: ts.s14),
+                          ],
+                        ),
+                    ],
+                  ),
+                ],
+              ).paddingHorizontal(0).paddingVertical(8);
+            },
+          ).paddingHorizontal(16),
+          actions: [
+            TextButton(
+              onPressed: () {
+                isCanceled = true;
+                Navigator.of(context, rootNavigator: true).pop();
+              },
+              child: Text("Cancel".tl),
+            ),
+          ],
+        );
+      },
+    );
+
+    var navigator = Navigator.of(App.rootContext, rootNavigator: true);
+    navigator.push(dialogRoute);
 
     int updated = 0;
 
     await for (var progress in updateFolder(folder!, true)) {
       if (isCanceled) {
+        navigator.removeRoute(dialogRoute);
+        progressNotifier.dispose();
         return;
       }
-      loadingController.setProgress(progress.current / progress.total);
+      progressNotifier.value = progress;
       updated = progress.updated;
     }
 
-    loadingController.close();
+    navigator.removeRoute(dialogRoute);
+    progressNotifier.dispose();
 
     if (updated > 0) {
       GlobalState.findOrNull<_FollowUpdatesWidgetState>()?.updateCount();
@@ -579,20 +813,15 @@ abstract class FollowUpdatesService {
   }
 
   static void _showUpdateNotification(int count) {
-    try {
-      if (count <= 0) return;
-      var context = App.rootContext;
-      if (!context.mounted) return;
-      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        SnackBar(
-          content: Text('@c updates'.tlParams({'c': count.toString()})),
-          duration: const Duration(seconds: 4),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-    } catch (_) {
-      // Ignore errors when context is not available (e.g. app in background)
-    }
+    if (count <= 0) return;
+    // Store as persistent notification so it survives app restarts
+    // and stays visible until the user acts on it.
+    appdata.settings['pendingUpdateNotification'] = {
+      'count': count,
+      'time': DateTime.now().millisecondsSinceEpoch,
+    };
+    appdata.saveData();
+    updateFollowUpdatesUI();
   }
 
   /// Initialize the checker.

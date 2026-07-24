@@ -230,14 +230,25 @@ class _ReaderState extends State<Reader>
       handleVolumeEvent();
     }
     setImageCacheSize();
-    Future.delayed(const Duration(milliseconds: 200), () {
-      LocalFavoritesManager().onRead(cid, type);
-    });
     super.initState();
     _beginLoad(chapter);
+    // Allow user-initiated page changes to trigger onRead from now on.
+    // Use addPostFrameCallback to ensure all initialization (including
+    // async _beginLoad callbacks that may set page) has settled.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _hasMarkedAsRead = false;
+    });
   }
 
   bool _isInitialized = false;
+
+  /// Whether [onRead] has already been called for this reader session.
+  /// Prevents clearing the "has new update" flag when the user merely
+  /// opens the reader and closes it without turning any page.
+  /// Initialized to true to suppress calls during initState; set to false
+  /// after initState completes so that only user-initiated page changes
+  /// trigger the mark-as-read logic.
+  bool _hasMarkedAsRead = true;
 
   @override
   void didChangeDependencies() {
@@ -325,6 +336,10 @@ class _ReaderState extends State<Reader>
 
   @override
   void onPageChanged() {
+    if (!_hasMarkedAsRead) {
+      _hasMarkedAsRead = true;
+      LocalFavoritesManager().onRead(cid, type);
+    }
     updateHistory();
   }
 
