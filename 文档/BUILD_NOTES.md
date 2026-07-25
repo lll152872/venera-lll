@@ -105,7 +105,7 @@ Did you forget to call await RustLib.init();?
 
 - **不管书源修没修过、维不维护，书源相关的内容（如书源修复、书源新增等）一律不准写进根目录 `README.md`**。
 - README.md 只记录 App 本身的功能改动（阅读器、收藏、追更、UI 等），不记录任何书源层面的变化。
-- 书源的改动记录应写在本文件（如果跟构建/调试相关）或 `COMIC_SOURCE_DEV.md`（如果跟开发技巧相关）中。
+- 书源的改动记录应写在 `GIT_WORKFLOW.md`（如果跟 push/提交规则相关）或 `COMIC_SOURCE_DEV.md`（如果跟开发技巧相关）中。
 
 ## 8. build-win.bat
 

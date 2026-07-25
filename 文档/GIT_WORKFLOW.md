@@ -18,7 +18,7 @@
 ### 2.1 书源 JS 文件不要 push
 
 - `book source/*.js`（如 baozi.js / jm.js / new.js）是本地书源，**不要** add/commit/push 进主仓库。
-- 这些文件改动会不必要地触发 CI build APK，且不应进主仓库。
+- 原因：书源是用户本地私有的，不属于公共仓库内容；且 push 会不必要地触发 CI（即使可用 `[skip ci]` 跳过，也不应进仓库）。
 - 处理：保持它们 untracked / 不纳入提交。提交时只 `git add` 真正的源码改动（如 `lib/pages/reader/*.dart`），不要 `git add .`。
 
 ### 2.2 pubspec.lock 不要进 commit
@@ -71,7 +71,7 @@ git commit -m "docs: 只改文档不触发构建 [skip ci]" && git push
 
 **完整发版步骤**：
 
-1. 改版本号（两处，见 `BUILD_NOTES.md` 第 4 节）：
+1. 改版本号（两处，见 `BUILD_NOTES.md` 第 2 节）：
    - `pubspec.yaml` 的 `version:` → `x.y.0+build`
    - `lib/foundation/app.dart` 的 `final version` → `"x.y.0"`
 2. 提交并推送：
