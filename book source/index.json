@@ -1,0 +1,37 @@
+[
+  {
+    "name": "拷贝漫画",
+    "key": "copy_manga",
+    "fileName": "copy_manga.js",
+    "version": "1.4.1",
+    "url": "https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/copy_manga.js"
+  },
+  {
+    "name": "包子漫画",
+    "key": "baozi",
+    "fileName": "baozi.js",
+    "version": "1.1.6",
+    "url": "https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/baozi.js"
+  },
+  {
+    "name": "禁漫天堂",
+    "key": "jm",
+    "fileName": "jm.js",
+    "version": "1.4.0",
+    "url": "https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/jm.js"
+  },
+  {
+    "name": "hitomi.la",
+    "key": "hitomi",
+    "fileName": "hitomi.js",
+    "version": "1.1.2",
+    "url": "https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/hitomi.js"
+  },
+  {
+    "name": "漫蛙吧",
+    "key": "manwaba",
+    "fileName": "manwaba.js",
+    "version": "1.1.0",
+    "url": "https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/manwaba.js"
+  }
+]
