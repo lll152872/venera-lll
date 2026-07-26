@@ -127,3 +127,18 @@ return new Uint8Array(decrypted).buffer;
 
 - 解密密钥通常从网站 `base.js` 提取（搜 `getSecureImageUrl` / `AES` / `decrypt`）
 - 注意：`isEncode: false` 表示**解密**（不是加密）
+
+## 11. 虫虫漫画 (warchina / warchina.com) 源要点
+
+纯 HTML 站，无干净 JSON API。关键解析点（均实测）：
+
+- **搜索**：`https://warchina.com/search?keyword={kw}`，单页无分页（`maxPage:1`），最多约 85 条。
+- **详情**：`https://warchina.com/comic/{id}/`。标题 `<h1>`；作者 `<a href*="/author/">` 文本；分类 `<a href*="/cate/">` 文本；状态/更新时间在散文文本里，HtmlDocument 不便读整段，直接对 `res.body` 正则取（`漫画状态[：:]\s*(\S+)`、`最后更新[：:]\s*([\d\-/]+)`）。
+- **章节列表**：详情页所有 `<a href="/comic/{id}/{cid}.html">`，按 cid 去重进 `Map`，保留 HTML 出现顺序（站点默认倒序）。注意同一话常有多个上传 cid（旧版重传），全部保留即可。
+- **章节图片（核心）**：阅读页内嵌 `var params = {...,"chapter_images2":"BASE64",...}`。
+  - `chapter_images2` = Base64 编码的图片 URL 串，分隔符 `$qingtiandy$`。
+  - 流程：`Convert.decodeBase64(b64)` → 字节 → `Convert.decodeUtf8(bytes)` → 字符串 → `.split('$qingtiandy$')` = 完整图片 URL 数组。
+  - 字段名偶尔为 `chapter_images`（兜底正则）。图片是标准 WebP，**无需解密**。
+- **图片 CDN 反 referer（坑）**：图片在 `*.g-mh.online`，**带 warchina referer 的请求被拒**（503/超时），无 referer 直连成功。故 `onImageLoad` 只给 UA、**故意不设 referer**。若 App 实测仍 503，是 venera 网络层自动注入了 referer，改 `referer:''` 或换成图片自身 origin 做 referer。
+- **封面**：`_small.jpg` 是真封面（17KB），去掉 `_small` 反而 404，保留 `_small`。
+- **卡片正则**：详情页链接用 `/\/comic\/(\d+)\/?$/`（结尾锚定，自动排除章节 `.html` 链接）。
