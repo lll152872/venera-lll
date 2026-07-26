@@ -133,7 +133,10 @@ return new Uint8Array(decrypted).buffer;
 纯 HTML 站，无干净 JSON API。关键解析点（均实测）：
 
 - **搜索**：`https://warchina.com/search?keyword={kw}`，单页无分页（`maxPage:1`），最多约 85 条。
-- **详情**：`https://warchina.com/comic/{id}/`。标题 `<h1>`；作者 `<a href*="/author/">` 文本；分类 `<a href*="/cate/">` 文本；状态/更新时间在散文文本里，HtmlDocument 不便读整段，直接对 `res.body` 正则取（`漫画状态[：:]\s*(\S+)`、`最后更新[：:]\s*([\d\-/]+)`）。
+- **详情**：`https://warchina.com/comic/{id}/`。**元数据优先用 `<meta og:novel:*>`**（静态、最可靠）：`og:title`/`og:image`(=封面 _small.jpg)/`og:novel:author`/`og:novel:status`/`og:novel:update_time`。
+  - **坑**：`最后更新：` 后日期被包在 `<font color="red">` 里，散文正则 `最后更新:\s*(\d...)` 会失配，必须改用 meta。
+  - **分类**：从 `info3` 信息块"漫画类别："后取 `<a>` 文本，**不要**用 `querySelector('a[href*="/cate/"]')` 取第一个——右侧"精彩推荐"区的 cate 链接会干扰（实测首个是推荐区的 JJ韩漫而非本作分类）。
+  - 站点**无独立"标签/题材"区**（grep 标签/关键词/类型/tag/label 全无命中），只有大类（国漫/韩漫），tags 里能放的只有 作者/分类/状态。
 - **章节列表**：详情页所有 `<a href="/comic/{id}/{cid}.html">`，按 cid 去重收集成数组，再 **`reverse()` 反转为正序（第1话在前）**。站点 HTML 默认倒序（最新/番外在前、第1话在尾），若不反转，第1话会变成最后一章（v1.0.0 的 bug，v1.0.1 修复）。注意同一话常有多个上传 cid（旧版重传），全部保留即可。
 - **章节图片（核心）**：阅读页内嵌 `var params = {...,"chapter_images2":"BASE64",...}`。
   - `chapter_images2` = Base64 编码的图片 URL 串，分隔符 `$qingtiandy$`。

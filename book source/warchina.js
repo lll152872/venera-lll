@@ -12,7 +12,7 @@
 class WarChina extends ComicSource {
   name = '虫虫漫画';
   key = 'warchina';
-  version = '1.0.1';
+  version = '1.0.2';
   minAppVersion = '1.4.0';
   url = 'https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/warchina.js';
 
@@ -94,35 +94,26 @@ class WarChina extends ComicSource {
       let html = res.body;
       let doc = new HtmlDocument(html);
 
-      // 标题：<h1>
-      let titleEl = doc.querySelector('h1');
-      let title = titleEl ? titleEl.text.trim() : '';
+      // 元数据优先用 <meta og:novel:*>（静态、最可靠，不依赖散文文本/推荐区干扰）
+      let meta = (p) => {
+        let m = html.match(new RegExp('property="' + p + '"\\s+content="([^"]*)"'));
+        return m ? m[1] : '';
+      };
+      let title = meta('og:title');
+      let cover = meta('og:image');                    // 即 _small.jpg 封面
+      let author = meta('og:novel:author');
+      let status = meta('og:novel:status');
+      // 原散文正则 `最后更新:\s*(\d...)` 会因日期被 <font color="red"> 包裹而失配，改用 meta
+      let updateTime = meta('og:novel:update_time');
 
-      // 封面：第一张 /upload2/ 图片（详情页头部即为封面，_small.jpg 是真封面）
-      let cover = '';
-      let imgs = doc.querySelectorAll('img');
-      for (let i = 0; i < imgs.length; i++) {
-        let s = imgs[i].attributes['src'] || '';
-        if (s.indexOf('/upload2/') >= 0) { cover = this.abs(s); break; }
-      }
-
-      // 作者：<a href*="/author/">文本
-      let author = '';
-      let authorEl = doc.querySelector('a[href*="/author/"]');
-      if (authorEl) author = authorEl.text.trim();
-
-      // 分类：<a href*="/cate/">文本
+      // 分类：从 info3 信息块"漫画类别："后取，避免被右侧"精彩推荐"区的 cate 链接干扰
       let category = '';
-      let cateEl = doc.querySelector('a[href*="/cate/"]');
-      if (cateEl) category = cateEl.text.trim();
-
-      // 状态 / 更新时间：正则取原始 HTML（HtmlDocument 不便读整段散文文本）
-      let status = '';
-      let sm = html.match(/漫画状态[：:]\s*([^\s<]+)/);
-      if (sm) status = sm[1].trim();
-      let updateTime = '';
-      let um = html.match(/最后更新[：:]\s*([\d\-\/]+)/);
-      if (um) updateTime = um[1].trim();
+      let infoIdx = html.indexOf('info3');
+      if (infoIdx >= 0) {
+        let block = html.slice(infoIdx, infoIdx + 500);
+        let cm = block.match(/漫画类别[：:]\s*<a[^>]*>([^<]+)<\/a>/);
+        if (cm) category = cm[1].trim();
+      }
 
       // 章节列表：所有 <a href="/comic/{id}/{cid}.html">，按 cid 去重
       // 站点 HTML 默认倒序（最新/番外在前、第1话在尾），先收集再反转为正序（第1话在前）
