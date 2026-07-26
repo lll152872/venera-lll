@@ -12,7 +12,7 @@
 class WarChina extends ComicSource {
   name = '虫虫漫画';
   key = 'warchina';
-  version = '1.0.0';
+  version = '1.0.1';
   minAppVersion = '1.4.0';
   url = 'https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/warchina.js';
 
@@ -124,8 +124,9 @@ class WarChina extends ComicSource {
       let um = html.match(/最后更新[：:]\s*([\d\-\/]+)/);
       if (um) updateTime = um[1].trim();
 
-      // 章节列表：所有 <a href="/comic/{id}/{cid}.html">，按 cid 去重，保留 HTML 出现顺序（站点默认倒序）
-      let chapters = new Map();
+      // 章节列表：所有 <a href="/comic/{id}/{cid}.html">，按 cid 去重
+      // 站点 HTML 默认倒序（最新/番外在前、第1话在尾），先收集再反转为正序（第1话在前）
+      let chArr = [];
       let seen = new Set();
       let links = doc.querySelectorAll('a');
       let reg = new RegExp('/comic/' + id + '/(\\d+)\\.html');
@@ -138,7 +139,12 @@ class WarChina extends ComicSource {
         let ctitle = (links[i].text || '').trim();
         if (!ctitle) continue;
         seen.add(cid);
-        chapters.set(cid, ctitle);
+        chArr.push({ cid: cid, title: ctitle });
+      }
+      chArr.reverse();
+      let chapters = new Map();
+      for (let i = 0; i < chArr.length; i++) {
+        chapters.set(chArr[i].cid, chArr[i].title);
       }
 
       // 简介：warchina 多数漫画不提供简介（meta 写"暂未提供"），尝试常见容器，失败则留空

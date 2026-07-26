@@ -134,7 +134,7 @@ return new Uint8Array(decrypted).buffer;
 
 - **搜索**：`https://warchina.com/search?keyword={kw}`，单页无分页（`maxPage:1`），最多约 85 条。
 - **详情**：`https://warchina.com/comic/{id}/`。标题 `<h1>`；作者 `<a href*="/author/">` 文本；分类 `<a href*="/cate/">` 文本；状态/更新时间在散文文本里，HtmlDocument 不便读整段，直接对 `res.body` 正则取（`漫画状态[：:]\s*(\S+)`、`最后更新[：:]\s*([\d\-/]+)`）。
-- **章节列表**：详情页所有 `<a href="/comic/{id}/{cid}.html">`，按 cid 去重进 `Map`，保留 HTML 出现顺序（站点默认倒序）。注意同一话常有多个上传 cid（旧版重传），全部保留即可。
+- **章节列表**：详情页所有 `<a href="/comic/{id}/{cid}.html">`，按 cid 去重收集成数组，再 **`reverse()` 反转为正序（第1话在前）**。站点 HTML 默认倒序（最新/番外在前、第1话在尾），若不反转，第1话会变成最后一章（v1.0.0 的 bug，v1.0.1 修复）。注意同一话常有多个上传 cid（旧版重传），全部保留即可。
 - **章节图片（核心）**：阅读页内嵌 `var params = {...,"chapter_images2":"BASE64",...}`。
   - `chapter_images2` = Base64 编码的图片 URL 串，分隔符 `$qingtiandy$`。
   - 流程：`Convert.decodeBase64(b64)` → 字节 → `Convert.decodeUtf8(bytes)` → 字符串 → `.split('$qingtiandy$')` = 完整图片 URL 数组。
