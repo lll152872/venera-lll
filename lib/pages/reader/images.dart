@@ -947,6 +947,12 @@ class _ContinuousModeState extends State<_ContinuousMode>
     _growCache(_spliced.length + kCacheGrowthPadding);
     var removed = _spliced.unloadExcess();
     if (removed > 0) {
+      // 关键修复：必须在平移 _pageHeights 前同步补偿 pixels。
+      // unloadExcess 删除头部 removed 张图后，_pageHeights 的 key 会平移（减 removed），
+      // 但 _scrollController.pixels 不会自动跟随。若不补偿，pixels 与平移后的 _pageHeights
+      // 错位，_gpFromPixels 会算出偏大的 gp → 跳到错误章节/页码。
+      // 表现：连续读超过 kMaxChaptersInMemory(10) 章后触发，"看一段时间后"才出现。
+      _compensatePixelsForFrontRemoval(removed);
       if (cached.length > removed) cached.removeRange(0, removed);
       // 头部删除了 removed 张图，平移 _pageHeights 的 key 保持一致。
       if (_pageHeights.isNotEmpty) {
@@ -1030,14 +1036,17 @@ class _ContinuousModeState extends State<_ContinuousMode>
     });
     _growCache(_spliced.length + kCacheGrowthPadding);
     var removed = _spliced.unloadExcess();
-    if (removed > 0 && _pageHeights.isNotEmpty) {
-      final Map<int, double> shifted = {};
-      _pageHeights.forEach((k, v) {
-        if (k > removed) shifted[k - removed] = v;
-      });
-      _pageHeights
-        ..clear()
-        ..addAll(shifted);
+    if (removed > 0) {
+      _compensatePixelsForFrontRemoval(removed); // 同上，必须先补偿再平移
+      if (_pageHeights.isNotEmpty) {
+        final Map<int, double> shifted = {};
+        _pageHeights.forEach((k, v) {
+          if (k > removed) shifted[k - removed] = v;
+        });
+        _pageHeights
+          ..clear()
+          ..addAll(shifted);
+      }
     }
   }
 
@@ -1093,6 +1102,33 @@ class _ContinuousModeState extends State<_ContinuousMode>
     return horizontal
         ? cellSize * imgW / imgH
         : cellSize * imgH / imgW;
+  }
+
+  /// unloadExcess 删除头部 [removed] 张图后，同步补偿 pixels。
+  ///
+  /// 必须在 _pageHeights 平移**前**调用（用旧 key 算被删除页的高度和）。
+  /// 否则 pixels 仍包含已删除页的高度，但 _pageHeights 已平移（key 减 removed），
+  /// _gpFromPixels(pixels) 会算出偏大的 gp → 跳到错误章节/页码。
+  /// 表现：连续读超过 kMaxChaptersInMemory(10) 章后触发，"看一段时间后"才出现。
+  void _compensatePixelsForFrontRemoval(int removed) {
+    if (removed <= 0 ||
+        !_scrollController.hasClients ||
+        _placeholderPageHeight <= 0) {
+      return;
+    }
+    // 用平移前的 _pageHeights 算被删除页（key=1..removed）的高度总和
+    double removedHeight = 0;
+    for (int i = 1; i <= removed; i++) {
+      removedHeight += _pageHeights[i] ?? _placeholderPageHeight;
+    }
+    if (removedHeight <= 0.01) return;
+    // 临时屏蔽 listener：jumpTo 会触发 listener，此时 _pageHeights 还未平移，
+    // 反算 gp 会用中间态出错。
+    _scrollController.removeListener(_syncReaderState);
+    final double newPixels = (_scrollController.position.pixels - removedHeight)
+        .clamp(0.0, _scrollController.position.maxScrollExtent);
+    _scrollController.jumpTo(newPixels);
+    _scrollController.addListener(_syncReaderState);
   }
 
   /// 第 gp 页起始处的像素偏移 = Σ_{i=1}^{gp-1} (pageHeight(i) + kPageSpacing)。
