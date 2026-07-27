@@ -723,6 +723,45 @@ class _ContinuousMode extends StatefulWidget {
   State<_ContinuousMode> createState() => _ContinuousModeState();
 }
 
+/// 注册 item 的 BuildContext 到父级，用于 _currentPageFromViewport 遍历可见 item。
+///
+/// 在 item build 时通过 [onRegister] 注册 context，dispose 时通过 [onUnregister] 注销。
+/// _ContinuousModeState._itemContexts 只保留当前可见（已 build）的 item，
+/// _currentPageFromViewport 遍历它找视口中心对应的 item index（=页码）。
+class _ItemContextRegistrar extends StatefulWidget {
+  final int index;
+  final void Function(int index, BuildContext context) onRegister;
+  final void Function(int index) onUnregister;
+  final Widget child;
+
+  const _ItemContextRegistrar({
+    required this.index,
+    required this.onRegister,
+    required this.onUnregister,
+    required this.child,
+  });
+
+  @override
+  State<_ItemContextRegistrar> createState() => _ItemContextRegistrarState();
+}
+
+class _ItemContextRegistrarState extends State<_ItemContextRegistrar> {
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    widget.onRegister(widget.index, context);
+  }
+
+  @override
+  void dispose() {
+    widget.onUnregister(widget.index);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
+
 class _ContinuousModeState extends State<_ContinuousMode>
     implements _ImageViewController {
   late _ReaderState reader;
@@ -778,12 +817,16 @@ class _ContinuousModeState extends State<_ContinuousMode>
   final Map<int, double> _pageHeights = {};
   double _placeholderPageHeight = 0; // 首帧占位（build 时赋视口高）
 
+  /// 可见 item 的 BuildContext 映射（index → context）。
+  /// 由 _ItemContextRegistrar 在 item build 时注册、dispose 时注销。
+  /// _currentPageFromViewport 遍历它找视口中心对应的 item index（=页码），
+  /// 替代 _gpFromPixels 像素累加反算，消除 _pageHeights 异步高度变化导致的页码错位。
+  final Map<int, BuildContext> _itemContexts = {};
+
   /// 实际布局用的 cross-axis 尺寸（垂直模式=宽，水平模式=高）。
   /// 与 _placeholderPageHeight / _pageHeights 联合使用确保 item 渲染高度
   /// 和 _pageHeights 存储值源于同一宽度，消除双轨不一致导致的页间空白。
   double _layoutCrossAxis = 0;
-
-  bool _isReversed = false;
 
   /// ── Download concurrency limiter ──
   /// Prevents launching too many parallel image downloads at once.
@@ -957,14 +1000,10 @@ class _ContinuousModeState extends State<_ContinuousMode>
     _growCache(_spliced.length + kCacheGrowthPadding);
     var removed = _spliced.unloadExcess();
     if (removed > 0) {
-      // 关键修复：必须在平移 _pageHeights 前同步补偿 pixels。
-      // unloadExcess 删除头部 removed 张图后，_pageHeights 的 key 会平移（减 removed），
-      // 但 _scrollController.pixels 不会自动跟随。若不补偿，pixels 与平移后的 _pageHeights
-      // 错位，_gpFromPixels 会算出偏大的 gp → 跳到错误章节/页码。
-      // 表现：连续读超过 kMaxChaptersInMemory(10) 章后触发，"看一段时间后"才出现。
-      _compensatePixelsForFrontRemoval(removed);
+      // 平移 _pageHeights 的 key 保持与 spliced list 一致（用于 _offsetForGp 跳转估算）。
+      // 不再补偿 pixels——页码由 _currentPageFromViewport（item 实际位置）决定，
+      // 与 _pageHeights/pixels 解耦。
       if (cached.length > removed) cached.removeRange(0, removed);
-      // 头部删除了 removed 张图，平移 _pageHeights 的 key 保持一致。
       if (_pageHeights.isNotEmpty) {
         final Map<int, double> shifted = {};
         _pageHeights.forEach((k, v) {
@@ -1047,7 +1086,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
     _growCache(_spliced.length + kCacheGrowthPadding);
     var removed = _spliced.unloadExcess();
     if (removed > 0) {
-      _compensatePixelsForFrontRemoval(removed); // 同上，必须先补偿再平移
+      // 平移 _pageHeights（同 _appendNextChapter，不再补偿 pixels）
       if (_pageHeights.isNotEmpty) {
         final Map<int, double> shifted = {};
         _pageHeights.forEach((k, v) {
@@ -1097,6 +1136,48 @@ class _ContinuousModeState extends State<_ContinuousMode>
     super.initState();
   }
 
+  /// 通过遍历可见 item 的 RenderBox 实际渲染位置，找视口中心对应的 item index。
+  ///
+  /// 替代 _gpFromPixels（像素累加反算），从根本上消除 _pageHeights 异步高度变化
+  /// 导致的页码错位——页码不再依赖 _pageHeights，而是由 item 在视口中的实际位置决定。
+  /// 图片高度怎么变、加载顺序怎么乱，item 的 RenderBox 位置是实时准确的。
+  /// 可见 item 通常 3-5 个，遍历成本可忽略。
+  int _currentPageFromViewport() {
+    if (_itemContexts.isEmpty || _spliced.length == 0) {
+      return reader.page.clamp(1, _spliced.length > 0 ? _spliced.length : 1);
+    }
+    final bool horizontal = reader.mode != ReaderMode.continuousTopToBottom;
+    // 视口中心在屏幕中的坐标
+    final viewport = context.findRenderObject();
+    double viewportCenter;
+    if (viewport is RenderBox && viewport.attached) {
+      final size = viewport.size;
+      viewportCenter = horizontal
+          ? viewport.localToGlobal(Offset(size.width / 2, 0)).dx
+          : viewport.localToGlobal(Offset(0, size.height / 2)).dy;
+    } else {
+      viewportCenter = horizontal
+          ? reader.size.width / 2
+          : reader.size.height / 2;
+    }
+    int best = reader.page;
+    double bestDist = double.infinity;
+    _itemContexts.forEach((index, ctx) {
+      if (!ctx.mounted) return;
+      final ro = ctx.findRenderObject();
+      if (ro is! RenderBox || !ro.attached) return;
+      final double itemCenter = horizontal
+          ? ro.localToGlobal(Offset(ro.size.width / 2, 0)).dx
+          : ro.localToGlobal(Offset(0, ro.size.height / 2)).dy;
+      final dist = (itemCenter - viewportCenter).abs();
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = index;
+      }
+    });
+    return best.clamp(1, _spliced.length);
+  }
+
   /// 第 gp 页（1-based）的显示高度：从 _pageHeights 拿真实高，未加载回退占位。
   double _pageHeight(int gp) {
     return _pageHeights[gp] ?? _placeholderPageHeight;
@@ -1114,35 +1195,10 @@ class _ContinuousModeState extends State<_ContinuousMode>
         : cellSize * imgH / imgW;
   }
 
-  /// unloadExcess 删除头部 [removed] 张图后，同步补偿 pixels。
-  ///
-  /// 必须在 _pageHeights 平移**前**调用（用旧 key 算被删除页的高度和）。
-  /// 否则 pixels 仍包含已删除页的高度，但 _pageHeights 已平移（key 减 removed），
-  /// _gpFromPixels(pixels) 会算出偏大的 gp → 跳到错误章节/页码。
-  /// 表现：连续读超过 kMaxChaptersInMemory(10) 章后触发，"看一段时间后"才出现。
-  void _compensatePixelsForFrontRemoval(int removed) {
-    if (removed <= 0 ||
-        !_scrollController.hasClients ||
-        _placeholderPageHeight <= 0) {
-      return;
-    }
-    // 用平移前的 _pageHeights 算被删除页（key=1..removed）的高度总和
-    double removedHeight = 0;
-    for (int i = 1; i <= removed; i++) {
-      removedHeight += _pageHeights[i] ?? _placeholderPageHeight;
-    }
-    if (removedHeight <= 0.01) return;
-    // 临时屏蔽 listener：jumpTo 会触发 listener，此时 _pageHeights 还未平移，
-    // 反算 gp 会用中间态出错。
-    _scrollController.removeListener(_syncReaderState);
-    final double newPixels = (_scrollController.position.pixels - removedHeight)
-        .clamp(0.0, _scrollController.position.maxScrollExtent);
-    _scrollController.jumpTo(newPixels);
-    _scrollController.addListener(_syncReaderState);
-  }
-
   /// 第 gp 页起始处的像素偏移 = Σ_{i=1}^{gp-1} (pageHeight(i) + kPageSpacing)。
   /// 头尾占位 SizedBox（index 0 / length+1）不计入（它们高度为 0）。
+  /// 仅用于跳转估算（toPage/jumpTo），精度要求低——不准只影响跳转位置，
+  /// 跳转后 _syncReaderState 用 _currentPageFromViewport 自动校正页码。
   double _offsetForGp(int gp) {
     double off = 0;
     for (int i = 1; i < gp; i++) {
@@ -1154,23 +1210,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
   /// Reads the global page at the viewport center synchronously.
   int _currentCenterGp() {
     if (_placeholderPageHeight <= 0) return 1;
-    return _gpFromPixels(_scrollController.position.pixels).clamp(1, _spliced.length);
-  }
-
-  /// Converts scroll [pixels] to a 1-based global page.
-  /// 与 legado 一致：页码由「累加每页高度+间距」定位，不依赖固定 itemSize。
-  /// 间距固定故不影响页码判断。reverse 模式镜像轴（pixels=0 是列表末尾）。
-  int _gpFromPixels(double pixels) {
-    final double maxScroll = _scrollController.position.maxScrollExtent;
-    final double target = _isReversed ? (maxScroll - pixels) : pixels;
-    // 累加找落点
-    double acc = 0;
-    for (int i = 1; i <= _spliced.length; i++) {
-      final double h = _pageHeight(i) + kPageSpacing;
-      if (target < acc + h / 2) return i; // 落在第 i 页前半 → 算第 i 页
-      acc += h;
-    }
-    return _spliced.length; // 超出末尾
+    return _currentPageFromViewport();
   }
 
   /// Called by the reader after a chapter switch's images are ready.
@@ -1222,20 +1262,6 @@ class _ContinuousModeState extends State<_ContinuousMode>
           enableResize: true,
         );
 
-        // 同步预测量（legado 式预排版思路）：
-        // 1. B1: 查 ComicImage 进程级缓存（同一图片二次访问时命中）
-        // 2. B2: 查 ImageSizeCache 持久化缓存（App 重启后重读已下载章节时命中）
-        // 命中则让 _pageHeights[index] 第一次就拿到终值，避免占位→真实的高度突变
-        // 导致页码/章节乱跳。未命中走占位，由 onImageLoaded 回调 + pixels 补偿兜底。
-        if (_pageHeights[index] == null) {
-          final Size? cached = ComicImage.cachedSizeFor(image) ??
-              ImageSizeCache.instance.get(imageKey);
-          if (cached != null) {
-            _pageHeights[index] = _computeAxisSize(
-                cached.width.toInt(), cached.height.toInt());
-          }
-        }
-
         double? width, height;
         if (reader.mode == ReaderMode.continuousLeftToRight ||
             reader.mode == ReaderMode.continuousRightToLeft) {
@@ -1247,73 +1273,55 @@ class _ContinuousModeState extends State<_ContinuousMode>
         final double itemPlaceholder = reader.mode == ReaderMode.continuousTopToBottom
             ? reader.size.height
             : reader.size.width;
-        return ColoredBox(
-          color: context.colorScheme.surface,
-          child: ComicImage(
-            key: ValueKey(imageKey),
-            gaplessPlayback: true,
-            filterQuality: FilterQuality.medium,
-            image: image,
-            width: width,
-            height: height,
-            fit: BoxFit.contain,
-            placeholderHeight: itemPlaceholder,
-            onInit: (state) {
-              reader._dbg('[DBG] ComicImage onInit idx=$index key=$imageKey');
-              imageStates.add(state);
-            },
-            onImageLoaded: (imgW, imgH) {
-              final double h = _computeAxisSize(imgW, imgH);
-              final double oldH = _pageHeights[index] ?? _placeholderPageHeight;
-              if (oldH != h) {
-                // 用旧高度算当前 gp（更新前基准未变，算出来才准）
-                final bool canCompensate = _placeholderPageHeight > 0 &&
-                    _scrollController.hasClients;
-                final int curGp = canCompensate
-                    ? _gpFromPixels(_scrollController.position.pixels)
-                        .clamp(1, _spliced.length)
-                    : 1;
-                _pageHeights[index] = h;
-                // 关键修复：图片加载完成改变自身高度时，若该页在视口上方（index<curGp），
-                // 它的高度变化会推移视口起始偏移，但 _scrollController.pixels 不会自动跟随。
-                // 必须同步补偿 pixels，否则下次 _syncReaderState 用新高度反算 gp 会跳到
-                // 错误位置（表现：跨章或章内滚动时页码随机乱跳，长图差异大的漫画尤其明显）。
-                if (canCompensate && index < curGp) {
-                  final double delta = h - oldH;
-                  if (delta.abs() > 0.01) {
-                    // 临时屏蔽 listener：jumpTo 会触发 listener，此时 _pageHeights 已更新
-                    // 但 pixels 还在旧值→新值的过渡中，反算 gp 会用中间态出错。
-                    _scrollController.removeListener(_syncReaderState);
-                    _scrollController
-                        .jumpTo(_scrollController.position.pixels + delta);
-                    _scrollController.addListener(_syncReaderState);
-                  }
+        return _ItemContextRegistrar(
+          index: index,
+          onRegister: (idx, ctx) => _itemContexts[idx] = ctx,
+          onUnregister: (idx) => _itemContexts.remove(idx),
+          child: ColoredBox(
+            color: context.colorScheme.surface,
+            child: ComicImage(
+              key: ValueKey(imageKey),
+              gaplessPlayback: true,
+              filterQuality: FilterQuality.medium,
+              image: image,
+              width: width,
+              height: height,
+              fit: BoxFit.contain,
+              placeholderHeight: itemPlaceholder,
+              onInit: (state) {
+                reader._dbg('[DBG] ComicImage onInit idx=$index key=$imageKey');
+                imageStates.add(state);
+              },
+              onImageLoaded: (imgW, imgH) {
+                // 仅更新 _pageHeights（用于 _offsetForGp 跳转估算）。
+                // 不再补偿 pixels——页码由 _currentPageFromViewport（item 实际位置）决定，
+                // 与 _pageHeights 解耦，异步高度变化不会导致页码错位。
+                final double h = _computeAxisSize(imgW, imgH);
+                if ((_pageHeights[index] ?? -1) != h) {
+                  _pageHeights[index] = h;
+                  setState(() {});
                 }
-                setState(() {});
-              }
-            },
-            onDispose: (state) {
-              reader._dbg('[DBG] ComicImage onDispose idx=$index key=$imageKey');
-              imageStates.remove(state);
-            },
+              },
+              onDispose: (state) {
+                reader._dbg('[DBG] ComicImage onDispose idx=$index key=$imageKey');
+                imageStates.remove(state);
+              },
+            ),
           ),
         );
   }
 
   void _syncReaderState() {
     if (_placeholderPageHeight <= 0) return;
-    // legado 式：用连续滚动像素算 gp，不依赖 item index（item 重建时
-    // index 会乱跳导致回退）。页码由「累加每页高度+间距」定位，间距固定不影响判断。
-    // 自有 ScrollController 的 pixels 不受 ListView item 重建影响，不会归零。
-    double pixels = _scrollController.position.pixels;
-    double maxScroll = _scrollController.position.maxScrollExtent;
-    int gp = _gpFromPixels(pixels).clamp(1, _spliced.length);
+    // 页码由 item 实际渲染位置决定（_currentPageFromViewport），
+    // 不再依赖 _pageHeights 像素累加反算——彻底消除异步高度变化导致的页码错位。
+    int gp = _currentPageFromViewport();
     String flag = '';
     if (_lastSyncedGp >= 0 && (gp - _lastSyncedGp).abs() > 3 && !_spliced.appendingNext && !_spliced.prependingPrev && !_suppressPrepend) {
       flag = ' <<< GP JUMP (delta=${gp - _lastSyncedGp}, no splice active)';
     }
     _lastSyncedGp = gp;
-    reader._dbg('[DBG] _syncReaderState gp=$gp chapter=${reader.chapter} pixels=$pixels itemCount=${_spliced.length} maxScroll=$maxScroll reversed=$_isReversed placeholder=$_placeholderPageHeight$flag');
+    reader._dbg('[DBG] _syncReaderState gp=$gp chapter=${reader.chapter} itemCount=${_spliced.length} items=${_itemContexts.length}$flag');
     _updateReaderStateForSpliced(gp);
     _cacheSplicedImages(gp);
   }
@@ -1454,7 +1462,6 @@ class _ContinuousModeState extends State<_ContinuousMode>
     _placeholderPageHeight = reader.mode == ReaderMode.continuousTopToBottom
         ? reader.size.height
         : reader.size.width;
-    _isReversed = reader.mode == ReaderMode.continuousRightToLeft;
     Widget widget = ListView.builder(
       key: _listKey,
       controller: _scrollController,
