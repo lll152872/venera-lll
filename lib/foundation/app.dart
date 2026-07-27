@@ -7,6 +7,7 @@ import 'package:venera/foundation/history.dart';
 
 import 'appdata.dart';
 import 'favorites.dart';
+import 'image_size_cache.dart';
 import 'local.dart';
 
 export "widget_utils.dart";
@@ -94,6 +95,7 @@ class _App {
       history.init(),
       favorites.init(),
       local.init(),
+      ImageSizeCache.instance.init(),
     ]);
   }
 

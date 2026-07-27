@@ -4,6 +4,7 @@ import "package:venera/components/components.dart";
 import "package:venera/foundation/app.dart";
 import "package:venera/foundation/appdata.dart";
 import "package:venera/foundation/comic_source/comic_source.dart";
+import 'package:venera/foundation/search_query.dart';
 import "package:venera/pages/search_result_page.dart";
 import "package:venera/utils/translations.dart";
 
@@ -109,13 +110,16 @@ class _SliverSearchResultState extends State<_SliverSearchResult>
 
   void load() async {
     final data = widget.source.searchPageData!;
+    final query = SearchQuery.parse(widget.keyword);
     var options =
         (data.searchOptions ?? []).map((e) => e.defaultValue).toList();
     if (data.loadPage != null) {
-      var res = await data.loadPage!(widget.keyword, 1, options);
+      var res = await data.loadPage!(query.cleanKeyword, 1, options);
       if (!res.error) {
         setState(() {
-          comics = res.data;
+          comics = query.hasFilters
+              ? res.data.where(query.matches).toList()
+              : res.data;
           isLoading = false;
         });
       } else {
@@ -125,10 +129,12 @@ class _SliverSearchResultState extends State<_SliverSearchResult>
         });
       }
     } else if (data.loadNext != null) {
-      var res = await data.loadNext!(widget.keyword, null, options);
+      var res = await data.loadNext!(query.cleanKeyword, null, options);
       if (!res.error) {
         setState(() {
-          comics = res.data;
+          comics = query.hasFilters
+              ? res.data.where(query.matches).toList()
+              : res.data;
           isLoading = false;
         });
       } else {

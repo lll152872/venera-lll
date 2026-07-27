@@ -56,3 +56,6 @@ testlog/
 windows/sqlite3-src/
 apk-output/
 android/build/
+
+# WorkBuddy 工作目录（项目记忆/任务状态，不提交）
+.workbuddy/

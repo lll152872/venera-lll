@@ -4,6 +4,7 @@ import 'package:venera/foundation/app.dart';
 import 'package:venera/foundation/appdata.dart';
 import 'package:venera/foundation/comic_source/comic_source.dart';
 import 'package:venera/foundation/global_state.dart';
+import 'package:venera/foundation/search_query.dart';
 import 'package:venera/pages/search_page.dart';
 import 'package:venera/utils/ext.dart';
 import 'package:venera/utils/tags_translation.dart';
@@ -145,6 +146,7 @@ class _SearchResultPageState extends State<SearchResultPage> {
   @override
   Widget build(BuildContext context) {
     var source = ComicSource.find(sourceKey);
+    final query = SearchQuery.parse(text);
     return ComicList(
       key: Key(text + options.toString() + sourceKey),
       errorLeading: AppSearchBar(
@@ -158,21 +160,23 @@ class _SearchResultPageState extends State<SearchResultPage> {
       ),
       loadPage: source!.searchPageData!.loadPage == null
           ? null
-          : (i) {
-              return source.searchPageData!.loadPage!(
-                text,
+          : (i) async {
+              final res = await source.searchPageData!.loadPage!(
+                query.cleanKeyword,
                 i,
                 options,
               );
+              return query.filterResult(res);
             },
       loadNext: source.searchPageData!.loadNext == null
           ? null
-          : (i) {
-              return source.searchPageData!.loadNext!(
-                text,
+          : (i) async {
+              final res = await source.searchPageData!.loadNext!(
+                query.cleanKeyword,
                 i,
                 options,
               );
+              return query.filterResult(res);
             },
     );
   }

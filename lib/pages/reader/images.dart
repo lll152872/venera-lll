@@ -1083,6 +1083,18 @@ class _ContinuousModeState extends State<_ContinuousMode>
     return _pageHeights[gp] ?? _placeholderPageHeight;
   }
 
+  /// 根据图片真实像素尺寸 (imgW, imgH) 和当前阅读模式，算出该页沿
+  /// 滚动轴的显示尺寸（垂直模式=高度，水平模式=宽度）。
+  /// 与 ComicImage 内部 build 的尺寸算法保持一致，确保 _pageHeights 存的值
+  /// 和 item 实际渲染高度同源（消除双轨不一致导致的页间空白/跳变）。
+  double _computeAxisSize(int imgW, int imgH) {
+    final bool horizontal = reader.mode != ReaderMode.continuousTopToBottom;
+    final double cellSize = horizontal ? reader.size.height : _layoutCrossAxis;
+    return horizontal
+        ? cellSize * imgW / imgH
+        : cellSize * imgH / imgW;
+  }
+
   /// 第 gp 页起始处的像素偏移 = Σ_{i=1}^{gp-1} (pageHeight(i) + kPageSpacing)。
   /// 头尾占位 SizedBox（index 0 / length+1）不计入（它们高度为 0）。
   double _offsetForGp(int gp) {
@@ -1130,7 +1142,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
       Future.delayed(const Duration(milliseconds: kPrependSuppressWindowMs), () {
         if (mounted) _suppressPrepend = false;
       });
-      _prefetchNeighbors(); // legado: prefetch prev/next on entry for seamless switch
+      _appendNextChapter(); // immediately splice next chapter for seamless reading
     });
   }
 
@@ -1164,6 +1176,20 @@ class _ContinuousModeState extends State<_ContinuousMode>
           enableResize: true,
         );
 
+        // 同步预测量（legado 式预排版思路）：
+        // 1. B1: 查 ComicImage 进程级缓存（同一图片二次访问时命中）
+        // 2. B2: 查 ImageSizeCache 持久化缓存（App 重启后重读已下载章节时命中）
+        // 命中则让 _pageHeights[index] 第一次就拿到终值，避免占位→真实的高度突变
+        // 导致页码/章节乱跳。未命中走占位，由 onImageLoaded 回调 + pixels 补偿兜底。
+        if (_pageHeights[index] == null) {
+          final Size? cached = ComicImage.cachedSizeFor(image) ??
+              ImageSizeCache.instance.get(imageKey);
+          if (cached != null) {
+            _pageHeights[index] = _computeAxisSize(
+                cached.width.toInt(), cached.height.toInt());
+          }
+        }
+
         double? width, height;
         if (reader.mode == ReaderMode.continuousLeftToRight ||
             reader.mode == ReaderMode.continuousRightToLeft) {
@@ -1191,13 +1217,32 @@ class _ContinuousModeState extends State<_ContinuousMode>
               imageStates.add(state);
             },
             onImageLoaded: (imgW, imgH) {
-              final bool horizontal = reader.mode != ReaderMode.continuousTopToBottom;
-              final double cellSize = horizontal ? reader.size.height : _layoutCrossAxis;
-              final double h = horizontal
-                  ? cellSize * imgW / imgH
-                  : cellSize * imgH / imgW;
-              if ((_pageHeights[index] ?? -1) != h) {
+              final double h = _computeAxisSize(imgW, imgH);
+              final double oldH = _pageHeights[index] ?? _placeholderPageHeight;
+              if (oldH != h) {
+                // 用旧高度算当前 gp（更新前基准未变，算出来才准）
+                final bool canCompensate = _placeholderPageHeight > 0 &&
+                    _scrollController.hasClients;
+                final int curGp = canCompensate
+                    ? _gpFromPixels(_scrollController.position.pixels)
+                        .clamp(1, _spliced.length)
+                    : 1;
                 _pageHeights[index] = h;
+                // 关键修复：图片加载完成改变自身高度时，若该页在视口上方（index<curGp），
+                // 它的高度变化会推移视口起始偏移，但 _scrollController.pixels 不会自动跟随。
+                // 必须同步补偿 pixels，否则下次 _syncReaderState 用新高度反算 gp 会跳到
+                // 错误位置（表现：跨章或章内滚动时页码随机乱跳，长图差异大的漫画尤其明显）。
+                if (canCompensate && index < curGp) {
+                  final double delta = h - oldH;
+                  if (delta.abs() > 0.01) {
+                    // 临时屏蔽 listener：jumpTo 会触发 listener，此时 _pageHeights 已更新
+                    // 但 pixels 还在旧值→新值的过渡中，反算 gp 会用中间态出错。
+                    _scrollController.removeListener(_syncReaderState);
+                    _scrollController
+                        .jumpTo(_scrollController.position.pixels + delta);
+                    _scrollController.addListener(_syncReaderState);
+                  }
+                }
                 setState(() {});
               }
             },

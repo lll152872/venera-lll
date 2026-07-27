@@ -78,6 +78,16 @@ class ComicImage extends StatefulWidget {
 
   static void clear() => _ComicImageState.clear();
 
+  /// 同步查询某 [provider] 是否已有缓存的图片尺寸（legado 式预排版预测量）。
+  ///
+  /// 命中返回真实 [Size]（像素），未命中返回 null。
+  /// 由 `_ContinuousModeState._buildSplicedItem` 在 build 前调用，
+  /// 让 `_pageHeights[index]` 第一次就拿到终值，避免占位→真实的高度突变
+  /// 导致页码/章节乱跳。
+  static Size? cachedSizeFor(ImageProvider provider) {
+    return _ComicImageState._cache[provider.hashCode];
+  }
+
   @override
   State<ComicImage> createState() => _ComicImageState();
 }
@@ -209,6 +219,15 @@ class _ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
       _frameNumber = _frameNumber == null ? 0 : _frameNumber! + 1;
       _wasSynchronouslyLoaded = _wasSynchronouslyLoaded | synchronousCall;
     });
+    // 持久化图片尺寸（legado 式预排版思路的 fallback 层）：
+    // 让 App 重启后重读已下载章节时，_buildSplicedItem 能同步从
+    // ImageSizeCache 拿到真实尺寸，避免占位→真实突变导致页码乱跳。
+    // 仅对 ReaderImageProvider 记录（它有稳定的 imageKey 可作持久化 key）。
+    final provider = widget.image;
+    if (provider is ReaderImageProvider) {
+      ImageSizeCache.instance
+          .put(provider.imageKey, imageInfo.image.width, imageInfo.image.height);
+    }
     widget.onImageLoaded
         ?.call(imageInfo.image.width, imageInfo.image.height);
   }
