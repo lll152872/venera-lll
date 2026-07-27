@@ -865,6 +865,16 @@ class _ContinuousModeState extends State<_ContinuousMode>
 
   void _resetSplicedState() {
     _spliced.reset(reader.images!, reader.chapter);
+    // 关键修复：必须清空 _pageHeights，否则旧章的高度数据残留，
+    // 新章页数/图片高度不同时 key 错位：
+    //   - 旧章 16 页 → _pageHeights 有 key 1..16
+    //   - 新章 10 页 → _spliced 重置为 10 页，但 _pageHeights[11..16] 仍是旧章数据
+    //   - B1+B2 预测量只在 _pageHeights[index]==null 时填，不覆盖残留值
+    //   - 用户滚到新章末尾继续到下一章(gp=11+)，_gpFromPixels 用旧章第 11 页高度算 gp
+    //     → pixels 和实际渲染位置脱节 → "显示 p16 但内容到下一章"
+    // 同时影响 unloadExcess：如果 _pageHeights 有残留，平移后补偿也不准。
+    _pageHeights.clear();
+    _lastSyncedGp = -1;
   }
 
   /// Syncs _ReaderState (chapter + page) from a global page position.
