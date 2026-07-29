@@ -33,6 +33,7 @@ part 'side_bar.dart';
 part 'local_favorites_page.dart';
 part 'network_favorites_page.dart';
 part 'quick_search_page.dart';
+part 'all_history_page.dart';
 
 const _kLeftBarWidth = 256.0;
 
@@ -145,6 +146,9 @@ class _FavoritesPageState extends State<FavoritesPage> {
   Widget buildBody() {
     if (folder == _quickSearchFolderLabel) {
       return _QuickSearchPage();
+    }
+    if (folder == _allHistoryFolderLabel) {
+      return _AllHistoryPage();
     }
     if (folder == null) {
       return CustomScrollView(

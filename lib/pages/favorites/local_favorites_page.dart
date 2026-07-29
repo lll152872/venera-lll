@@ -2,6 +2,7 @@ part of 'favorites_page.dart';
 
 const _localAllFolderLabel = '^_^[%local_all%]^_^';
 const _quickSearchFolderLabel = '^_^[%quick_search%]^_^';
+const _allHistoryFolderLabel = '^_^[%all_history%]^_^';
 
 /// If the number of comics in a folder exceeds this limit, it will be
 /// fetched asynchronously.

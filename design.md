@@ -1,88 +1,49 @@
-# 修复：连续滚动模式下跨章/章内页码随机跳转
+# 重构：页码算法从像素累加反算改为 item 实际位置
 
-## 现象
-- 阅读模式：连续垂直滚动（`continuousTopToBottom`）
-- 触发：从 A 章末尾滚动到 B 章首页时，会随机跳到 B 章中部某页；A 章内滚动也会偶发乱跳
-- 频率：图片高度差异大的漫画经常出现；非稳定复现
-- 版本：v2.1 release 就有，非新引入
+## 背景
+git 历史中铁证：`_pageHeights` + `_gpFromPixels`（像素累加反算页码）机制导致了 **6 次** A 类 bug（#2,#12,#13,#16,#17,#18），反复修反复出。补丁路线已死，必须换机制。
 
-## 根因
-连续模式下页码（gp）由"累加每页高度 + 看 pixels 落点"反算：
-```
-_gpFromPixels(pixels): 累加 _pageHeights[i], pixels 落在哪个区间 → gp
-```
+## 方案
+保留自有 `ScrollController` + `ListView`（解决回退），保留 `SplicedChapters`（无缝跨章），但**页码算法从"像素累加反算"改为"item 实际渲染位置"**。
 
-`_pageHeights[gp]` 是**异步**填充的——图片加载完成时（`ComicImage.onImageLoaded`）才从占位高度（视口高）更新为真实高度。但 `_scrollController.position.pixels` **不会随高度变化同步调整**。
+### 核心改动
+1. **新增** `_currentPageFromViewport()`：遍历可见 item 的 `RenderBox.localToGlobal` 位置，找视口中心对应的 item index → 这就是页码（gp）
+2. **新增** `_ItemContextRegistrar` widget：item build 时注册 context，dispose 时注销
+3. **修改** `_syncReaderState`：用 `_currentPageFromViewport()` 替代 `_gpFromPixels(pixels)`
+4. **删除** `_gpFromPixels`
+5. **删除** `_compensatePixelsForFrontRemoval`（不再需要补偿 pixels）
+6. **简化** `onImageLoaded`：只更新 `_pageHeights`（跳转估算用），删除 A 补偿
+7. **删除** B1 预测量（`_buildSplicedItem` 里的 `cachedSizeFor` + `ImageSizeCache.get` 逻辑）
+8. **修改** 两处 `unloadExcess`：删除 `_compensatePixelsForFrontRemoval` 调用
 
-当某张图（位于 `index`）加载完成、高度从 `oldH` 变为 `h` 时：
-- 若 `index < currentGp`（在视口上方）：该页高度变化会推移下方所有内容，但 pixels 不变 → 下次 `_syncReaderState` 用新高度算 gp，会得到错误页码 → 触发 `reader.chapter = chap` 切错章节 + `setPage(localPage)` 钉死错误页码
-- 若 `index >= currentGp`：不影响累加基准，gp 不变（验证过）
+### 保留
+- `_pageHeights` + `_offsetForGp`：降级为跳转估算（精度要求低，不准只影响跳转位置，不影响页码）
+- `_computeAxisSize`：onImageLoaded 更新 `_pageHeights` 用
+- `SplicedChapters`：多章拼接不变
+- `ComicImage`：item 高度由它自己决定（零黑边不变）
+- `ImageSizeCache`：B2 持久化缓存保留
+- 常驻 Stack：跨章重载已解决，不动
+- `_resetSplicedState` 的 `_pageHeights.clear()`
 
-"随机"来源：图片加载完成顺序非确定，所以每次触发的 gp 偏移位置都不同。
+### 不改
+- 水平模式支持：`_currentPageFromViewport` 根据 `reader.mode` 用 x 或 y 坐标
 
-## legado 对照（D:\mycode\legado）
-legado 用"预排版 + 同步预测量 + 单 View 自绘"路线：
-- `ChapterProvider.kt:348` 排版时调 `ImageProvider.getImageSize`（`inJustDecodeBounds=true`）同步拿真实宽高
-- `TextPage.height` 在排版阶段就是终值
-- 绘制阶段只填位图，绝不动 layout 坐标
-- → 物理上不可能出现"加载完成→高度突变→页码乱跳"
+## 解决的 bug（9/15 历史根因）
+- A 类×6（_pageHeights 不同步）：页码不再依赖 _pageHeights，根因消除
+- B 类×2（双轨不一致）：页码由 item 位置决定，双轨不一致只影响跳转精度
+- D 类×1（回退）：_currentPageFromViewport 返回全局 gp，不会回退
 
-venera 是 Flutter + ListView 架构，无法完全照搬，但可借鉴"预测量"思路。
+## 不影响的已修复 bug
+- C 类×4（跨章重载）：常驻 Stack 已解决，不动
+- E 类×1（渲染对齐）：item 高度由 ComicImage 决定，和页码算法无关
+- F 类×1（触发逻辑）：已修
 
-## 最终方案：A + B1 + B2 三层组合
+## 跳转精度
+`toPage(n)` 用 `_offsetForGp(n)` 估算像素跳转：
+- B2 缓存命中或图片已加载：`_pageHeights` 准确，跳转精确
+- 图片未加载且 B2 未命中：用占位估算，跳到附近，跳转后 `_syncReaderState` 自动校正页码
 
-### A: 补偿 pixels（兜底所有异步场景）
-`images.dart` 的 `onImageLoaded` 回调：
-1. 更新前用旧高度算 `curGp = _gpFromPixels(pixels)`
-2. 更新 `_pageHeights[index] = h`
-3. 若 `index < curGp`：`pixels += (h - oldH)`，通过 `jumpTo` 同步应用
-4. 临时移除 ScrollController listener，避免 jumpTo 触发 `_syncReaderState` 用中间态反算
-
-覆盖：所有异步加载场景（包括首次访问从未下载的图）的 95%+。
-
-### B1: 复用 ComicImage._cache（二次访问章节 100%）
-发现 `ComicImage._cache`（`comic_image.dart:97`）已存在且 key 稳定（`BaseImageProvider` 重写了 `hashCode` 基于 `key` 字段）。
-- `ComicImage.cachedSizeFor(image)` 暴露 public API
-- `_buildSplicedItem` 构造 provider 后同步查，命中则直接填 `_pageHeights[index]`
-
-覆盖：同一图片二次访问时 build 前就有真实尺寸，item 第一次 layout 就是终值。
-
-### B2: 持久化尺寸缓存（App 重启后重读已下载章节 100%）
-新建 `lib/foundation/image_size_cache.dart`：
-- 内存 Map + JSON 文件持久化（debounced 2 秒写）
-- `init()` 启动时异步加载 JSON 到内存
-- `get(imageKey)` 同步查内存
-- `put(imageKey, w, h)` 更新内存 + debounce 写文件
-
-集成：
-- `ComicImage._handleImageFrame` 拿到尺寸时 `put`（识别 `ReaderImageProvider`）
-- `_buildSplicedItem` 在 B1 未命中后查 B2
-- `App.initComponents()` 加 `ImageSizeCache.instance.init()`
-
-覆盖：App 重启后重读已下载章节，build 前同步拿到尺寸。
-
-### 三层叠加覆盖矩阵
-| 场景 | 覆盖层 | 结果 |
-|---|---|---|
-| 二次访问章节（同进程内） | B1 | 100% 无 bug |
-| App 重启后重读已下载章节 | B2 | 100% 无 bug |
-| 首次访问从未下载的图 | A 兜底 | 95%+ 无 bug（极端 maxScrollExtent 钳制 case 除外） |
-
-## 风险与边界
-- `index == curGp`（当前页加载完成）：不补偿。该页高度变化只影响视口内露出内容，不影响 gp 累加基准。
-- `index > curGp`（视口下方）：不补偿。不影响累加。
-- pixels 超出 maxScrollExtent：Flutter 自动钳制，补偿不完全——可接受（用户在末尾时上方图片加载完成的概率低）。
-- 首帧（`_placeholderPageHeight <= 0`）：跳过补偿，等首帧布局完成。
-- ImageSizeCache init 失败：优雅降级，`get` 返回 null，退回 A 兜底。
-
-## 验证
-- `flutter analyze` 通过（仅原有 deprecation info，非本次引入）
-- 实机回归：在差异大的漫画上连续跨章滚动 + A 章内来回滚动，确认页码不再乱跳
-- 关注 debug log 中 `<<< GP JUMP` warning 是否消失
-
-## 涉及文件
-- `lib/foundation/image_size_cache.dart`（新建）：持久化尺寸缓存
-- `lib/foundation/app.dart`：initComponents 加 ImageSizeCache.init()
-- `lib/pages/reader/comic_image.dart`：暴露 cachedSizeFor + _handleImageFrame 写入持久化
-- `lib/pages/reader/reader.dart`：import image_size_cache
-- `lib/pages/reader/images.dart`：_computeAxisSize 辅助方法 + _buildSplicedItem 同步预测量 + onImageLoaded 补偿 pixels
+## 风险
+- `localToGlobal` 性能：可见 item 3-5 个，遍历成本可忽略
+- item context 生命周期：`_ItemContextRegistrar` 的 dispose 保证清理
+- 首帧（item 未 build）：fallback 到 `reader.page`

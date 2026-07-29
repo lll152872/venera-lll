@@ -392,6 +392,15 @@ void clearUnfavoritedHistory() {
         .toList();
   }
 
+  /// 获取全部历史记录，不做 hidden 源过滤（用于「全部历史」视图）。
+  List<History> getAllUnfiltered() {
+    var res = _db.select("""
+      select * from history
+      order by time DESC;
+    """);
+    return res.map((element) => History.fromRow(element)).toList();
+  }
+
   /// 获取最近阅读的漫画
   List<History> getRecent() {
     var res = _db.select("""

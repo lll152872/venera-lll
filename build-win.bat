@@ -20,3 +20,4 @@ for %%F in (build\windows\x64\runner\Release\sqlite3.dll) do (
 
 echo 完成！
 start "" build\windows\x64\runner\Release\venera.exe
+pause

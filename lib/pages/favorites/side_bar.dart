@@ -97,7 +97,7 @@ class _LeftBarState extends State<_LeftBar> implements FolderList {
               padding: widget.withAppbar
                   ? EdgeInsets.zero
                   : EdgeInsets.only(top: context.padding.top),
-              itemCount: folders.length + networkFolders.length + 4,
+              itemCount: folders.length + networkFolders.length + 5,
               itemBuilder: (context, index) {
                 if (index == 0) {
                   return buildLocalTitle();
@@ -111,6 +111,10 @@ class _LeftBarState extends State<_LeftBar> implements FolderList {
                   return buildLocalFolder(folders[index]);
                 }
                 index -= folders.length;
+                if (index == 0) {
+                  return buildAllHistoryFolder();
+                }
+                index--;
                 if (index == 0) {
                   return buildQuickSearchFolder();
                 }
@@ -347,6 +351,53 @@ class _LeftBarState extends State<_LeftBar> implements FolderList {
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Text(QuickSearchManager().entries.length.toString()),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget buildAllHistoryFolder() {
+    bool isSelected =
+        favPage.folder == _allHistoryFolderLabel && !favPage.isNetwork;
+    return InkWell(
+      onTap: () {
+        if (isSelected) return;
+        favPage.setFolder(false, _allHistoryFolderLabel);
+        widget.onSelected?.call();
+      },
+      child: Container(
+        height: 42,
+        alignment: Alignment.centerLeft,
+        decoration: BoxDecoration(
+          color: isSelected
+              ? context.colorScheme.primaryContainer.toOpacity(0.36)
+              : null,
+          border: Border(
+            left: BorderSide(
+              color: isSelected
+                  ? context.colorScheme.primary
+                  : Colors.transparent,
+              width: 2,
+            ),
+          ),
+        ),
+        padding: const EdgeInsets.only(left: 16),
+        child: Row(
+          children: [
+            Icon(Icons.history, color: context.colorScheme.secondary),
+            const SizedBox(width: 12),
+            Text("All History".tl),
+            const Spacer(),
+            Container(
+              margin: const EdgeInsets.only(right: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: context.colorScheme.surfaceContainer,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(HistoryManager().length.toString()),
             ),
           ],
         ),
