@@ -234,9 +234,16 @@ class _HistoryState extends State<_History> {
     if (mounted) {
       setState(() {
         history = HistoryManager().getRecent();
-        count = history
-            .where((h) => ComicSource.fromIntKey(h.type.value)?.hidden != true)
-            .length;
+        count = history.length;
+      });
+    }
+  }
+
+  void onSourceChange() {
+    if (mounted) {
+      setState(() {
+        history = HistoryManager().getRecent();
+        count = history.length;
       });
     }
   }
@@ -244,14 +251,16 @@ class _HistoryState extends State<_History> {
   @override
   void initState() {
     history = HistoryManager().getRecent();
-    count = HistoryManager().count();
+    count = history.length;
     HistoryManager().addListener(onHistoryChange);
+    ComicSourceManager().addListener(onSourceChange);
     super.initState();
   }
 
   @override
   void dispose() {
     HistoryManager().removeListener(onHistoryChange);
+    ComicSourceManager().removeListener(onSourceChange);
     super.dispose();
   }
 
@@ -305,9 +314,10 @@ class _HistoryState extends State<_History> {
                     itemCount: history.length,
                     itemBuilder: (context, index) {
                       final h = history[index];
-                      if (ComicSource.fromIntKey(h.type.value)?.hidden == true) {
-                        return const SizedBox.shrink();
-                      }
+                      // `history` is already filtered by `getRecent()` and
+                      // refreshed on source-change, so no per-item hidden
+                      // re-check is needed here. Doing one would cause a
+                      // timing mismatch with the HistoryPage.
                       final heroID = h.id.hashCode;
                       return SimpleComicTile(
                         comic: h,

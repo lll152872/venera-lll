@@ -17,12 +17,14 @@ class _HistoryPageState extends State<HistoryPage> {
   @override
   void initState() {
     HistoryManager().addListener(onUpdate);
+    ComicSourceManager().addListener(onSourceChange);
     super.initState();
   }
 
   @override
   void dispose() {
     HistoryManager().removeListener(onUpdate);
+    ComicSourceManager().removeListener(onSourceChange);
     super.dispose();
   }
 
@@ -36,6 +38,20 @@ class _HistoryPageState extends State<HistoryPage> {
         }
       }
     });
+  }
+
+  void onSourceChange() {
+    if (mounted) {
+      setState(() {
+        comics = HistoryManager().getAll();
+        if (multiSelectMode) {
+          selectedComics.removeWhere((comic, _) => !comics.contains(comic));
+          if (selectedComics.isEmpty) {
+            multiSelectMode = false;
+          }
+        }
+      });
+    }
   }
 
   var comics = HistoryManager().getAll();

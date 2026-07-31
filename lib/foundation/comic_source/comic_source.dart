@@ -71,6 +71,9 @@ class ComicSourceManager with ChangeNotifier, Init {
         }
       }
     }
+    // Notify listeners so pages depending on per-source state (e.g. hidden
+    // filter in reading history) can re-fetch after the initial async load.
+    notifyListeners();
   }
 
   Future reload() async {
