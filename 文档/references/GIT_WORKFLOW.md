@@ -1,16 +1,8 @@
 # Git 推送 / Release 工作流（Venera 漫画阅读器）
 
-> 本文件记录 Git 推送、提交规则、CI 跳过、Release 发布全流程。
-> 构建 / 版本号 / 调试环境问题见同目录 `BUILD_NOTES.md`。
->
-> **按任务挑章节看**（导航入口见 `00_导航.md`）：
->
-> | 你的任务 | 必读章节 | 可跳过 |
-> |---|---|---|
-> | 日常提交改好的代码 | 1、2 | 3、4、5 |
-> | 只改书源（不 push 源码） | 2.1（书源 js 别进仓库） | 其余全部 |
-> | 发版（打 tag / 挂 Release） | 3.3、3.4、5 + `BUILD_NOTES.md` 第 2 节 | 4 |
-> | 手动下载 CI 的 APK | 4 | 其余全部 |
+> **适用场景**：git push / 提交规则 / CI 跳过与触发 / Release 发版。
+> 构建 / 版本号 / 调试环境问题 → `BUILD_WINDOWS.md` / `VERSION_RULES.md`；书源开发 → `COMIC_SOURCE_DEV.md`。
+> 导航入口见 `../0_必看.md`。
 
 ## 1. 推送 git（走 Steam++ 代理，需跳过 SSL 证书验证）
 
@@ -80,7 +72,7 @@ git commit -m "docs: 只改文档不触发构建 [skip ci]" && git push
 
 **完整发版步骤**：
 
-1. 改版本号（两处，见 `BUILD_NOTES.md` 第 2 节）：
+1. 改版本号（两处，见 `VERSION_RULES.md`）：
    - `pubspec.yaml` 的 `version:` → `x.y.0+build`
    - `lib/foundation/app.dart` 的 `final version` → `"x.y.0"`
 2. 提交并推送：
