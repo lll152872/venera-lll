@@ -638,16 +638,28 @@ class _ComicDescription extends StatelessWidget {
             ),
             if (badge != null)
               Container(
-                padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
+                padding: const EdgeInsets.fromLTRB(4, 4, 6, 4),
                 decoration: BoxDecoration(
                   color: Theme.of(context).colorScheme.tertiaryContainer,
                   borderRadius: const BorderRadius.all(Radius.circular(8)),
                 ),
-                child: Center(
-                  child: Text(
-                    "${badge![0].toUpperCase()}${badge!.substring(1).toLowerCase()}",
-                    style: const TextStyle(fontSize: 12),
-                  ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: const BoxDecoration(
+                        color: Colors.red,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      "${badge![0].toUpperCase()}${badge!.substring(1).toLowerCase()}",
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ],
                 ),
               ),
           ],

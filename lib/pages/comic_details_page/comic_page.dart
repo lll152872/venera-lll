@@ -279,8 +279,8 @@ class _ComicPageState extends LoadingState<ComicPage, ComicDetails>
     }
 
     // Auto-check follow updates when opening detail page
-    var followFolder = appdata.settings["followUpdatesFolder"];
-    if (followFolder != null) {
+    var followFolders = LocalFavoritesManager().followUpdateFolders;
+    for (var followFolder in followFolders) {
       var comicType = ComicType(widget.sourceKey.hashCode);
       if (LocalFavoritesManager()
           .isInFolder(followFolder, widget.id, comicType)) {

@@ -268,13 +268,12 @@ class LocalFavoritesManager with ChangeNotifier {
       }
     }
     await appdata.ensureInit();
-    // Make sure the follow updates folder is ready
-    var followUpdateFolder = appdata.settings['followUpdatesFolder'];
-    if (followUpdateFolder is String &&
-        folderNames.contains(followUpdateFolder)) {
-      prepareTableForFollowUpdates(followUpdateFolder, false);
-    } else {
-      appdata.settings['followUpdatesFolder'] = null;
+    // Make sure all follow updates folders are ready
+    var followUpdateFolders = _getFollowUpdateFolders();
+    for (var folder in followUpdateFolders) {
+      if (folderNames.contains(folder)) {
+        prepareTableForFollowUpdates(folder, false);
+      }
     }
     initCounts();
   }
@@ -942,7 +941,7 @@ class LocalFavoritesManager with ChangeNotifier {
       markAsRead(id, type);
       return;
     }
-    var followUpdatesFolder = appdata.settings['followUpdatesFolder'];
+    var followUpdateFolders = _getFollowUpdateFolders();
     for (final folder in folderNames) {
       var rows = _db.select("""
         select * from "$folder"
@@ -971,11 +970,11 @@ class LocalFavoritesManager with ChangeNotifier {
             UPDATE "$folder"
             SET 
               $updateLocationSql
-              ${followUpdatesFolder == folder ? "has_new_update = 0," : ""}
+              ${followUpdateFolders.contains(folder) ? "has_new_update = 0," : ""}
               time = ?
             WHERE id == ? and type == ?;
           """, [newTime, id, type.value]);
-        if (followUpdatesFolder == folder) {
+        if (followUpdateFolders.contains(folder)) {
           updateFollowUpdatesUI();
         }
       }
@@ -1119,6 +1118,27 @@ class LocalFavoritesManager with ChangeNotifier {
     }
   }
 
+  /// Get the list of folders that are following updates.
+  /// Migrates the old single-folder setting to the new list setting.
+  List<String> _getFollowUpdateFolders() {
+    var existing = appdata.settings['followUpdatesFolders'];
+    if (existing is List) {
+      return List<String>.from(existing.cast<String>());
+    }
+    // Migrate from the old single-folder setting.
+    var old = appdata.settings['followUpdatesFolder'];
+    if (old is String && old.isNotEmpty && existsFolder(old)) {
+      appdata.settings['followUpdatesFolders'] = [old];
+      appdata.settings['followUpdatesFolder'] = null;
+      appdata.saveData();
+      return [old];
+    }
+    return <String>[];
+  }
+
+  /// Public accessor for the follow-updates folders.
+  List<String> get followUpdateFolders => _getFollowUpdateFolders();
+
   void prepareTableForFollowUpdates(String table, [bool clearData = true]) {
     // check if the table has the column "last_update_time" "has_new_update" "last_check_time"
     var columns = _db.select("""
@@ -1210,6 +1230,24 @@ class LocalFavoritesManager with ChangeNotifier {
       select count(*) as c from "$folder"
       where has_new_update == 1;
     """).first['c'];
+  }
+
+  /// Return the set of (id, type.value) that have new updates in any
+  /// follow-updates folder. Used by the favorites page to show badges.
+  Set<(String, int)> getUpdateStatusMap() {
+    var set = <(String, int)>{};
+    var folders = _getFollowUpdateFolders();
+    for (var folder in folders) {
+      if (!existsFolder(folder)) continue;
+      var rows = _db.select("""
+        select id, type from "$folder"
+        where has_new_update == 1;
+      """);
+      for (var row in rows) {
+        set.add((row['id'] as String, row['type'] as int));
+      }
+    }
+    return set;
   }
 
   List<FavoriteItemWithUpdateInfo> getUpdates(String folder) {
@@ -1307,15 +1345,17 @@ class LocalFavoritesManager with ChangeNotifier {
   }
 
   void markAsRead(String id, ComicType type) {
-    var folder = appdata.settings['followUpdatesFolder'];
-    if (!existsFolder(folder)) {
-      return;
+    var folders = _getFollowUpdateFolders();
+    for (var folder in folders) {
+      if (!existsFolder(folder)) {
+        continue;
+      }
+      _db.execute("""
+        update "$folder"
+        set has_new_update = 0
+        where id == ? and type == ?;
+      """, [id, type.value]);
     }
-    _db.execute("""
-      update "$folder"
-      set has_new_update = 0
-      where id == ? and type == ?;
-    """, [id, type.value]);
   }
 
   void close() {

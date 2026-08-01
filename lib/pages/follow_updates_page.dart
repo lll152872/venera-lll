@@ -21,25 +21,26 @@ class _FollowUpdatesWidgetState
     extends AutomaticGlobalState<FollowUpdatesWidget> {
   int _count = 0;
 
-  String? get folder => appdata.settings["followUpdatesFolder"];
+  List<String> get folders => LocalFavoritesManager().followUpdateFolders;
 
   Map<String, dynamic>? get _pendingNotification =>
       appdata.settings["pendingUpdateNotification"];
 
   void getCount() {
-    if (folder == null) {
+    var f = folders;
+    if (f.isEmpty) {
       _count = 0;
       return;
     }
-    if (!LocalFavoritesManager().folderNames.contains(folder)) {
-      _count = 0;
-      appdata.settings["followUpdatesFolder"] = null;
-      Future.microtask(() {
-        appdata.saveData();
-      });
-    } else {
-      _count = LocalFavoritesManager().countUpdates(folder!);
+    int count = 0;
+    for (var folder in f) {
+      if (!LocalFavoritesManager().folderNames.contains(folder)) continue;
+      var updates = LocalFavoritesManager().getUpdates(folder);
+      count += updates
+          .where((c) => c.type.comicSource?.hidden != true)
+          .length;
     }
+    _count = count;
   }
 
   void updateCount() {
@@ -204,10 +205,32 @@ class FollowUpdatesPage extends StatefulWidget {
 }
 
 class _FollowUpdatesPageState extends AutomaticGlobalState<FollowUpdatesPage> {
-  String? get folder => appdata.settings["followUpdatesFolder"];
+  List<String> get folders => LocalFavoritesManager().followUpdateFolders;
 
   var updatedComics = <FavoriteItemWithUpdateInfo>[];
   var allComics = <FavoriteItemWithUpdateInfo>[];
+
+  /// Load comics from all follow-updates folders, filtering out comics from
+  /// hidden sources.
+  void _loadAllFolders() {
+    var f = folders;
+    if (f.isEmpty) {
+      allComics = [];
+      updatedComics = [];
+      return;
+    }
+    var comics = <FavoriteItemWithUpdateInfo>[];
+    for (var folder in f) {
+      if (!LocalFavoritesManager().folderNames.contains(folder)) continue;
+      comics.addAll(LocalFavoritesManager().getComicsWithUpdatesInfo(folder));
+    }
+    comics = comics
+        .where((c) => c.type.comicSource?.hidden != true)
+        .toList();
+    allComics = comics;
+    sortComics();
+    updatedComics = allComics.where((c) => c.hasNewUpdate).toList();
+  }
 
   /// Sort comics by update time in descending order with nulls at the end.
   void sortComics() {
@@ -242,11 +265,7 @@ class _FollowUpdatesPageState extends AutomaticGlobalState<FollowUpdatesPage> {
       appdata.settings["pendingUpdateNotification"] = null;
       appdata.saveData();
     }
-    if (folder != null) {
-      allComics = LocalFavoritesManager().getComicsWithUpdatesInfo(folder!);
-      sortComics();
-      updatedComics = allComics.where((c) => c.hasNewUpdate).toList();
-    }
+    _loadAllFolders();
   }
 
   @override
@@ -255,7 +274,7 @@ class _FollowUpdatesPageState extends AutomaticGlobalState<FollowUpdatesPage> {
       body: SmoothCustomScrollView(
         slivers: [
           SliverAppbar(title: Text('Follow Updates'.tl)),
-          if (folder == null)
+          if (folders.isEmpty)
             buildNotConfigured(context)
           else
             buildConfigured(context),
@@ -302,6 +321,7 @@ class _FollowUpdatesPageState extends AutomaticGlobalState<FollowUpdatesPage> {
   }
 
   Widget buildConfigured(BuildContext context) {
+    var folderList = folders;
     return SliverToBoxAdapter(
       child: Container(
         margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
@@ -317,14 +337,14 @@ class _FollowUpdatesPageState extends AutomaticGlobalState<FollowUpdatesPage> {
           children: [
             ListTile(
               leading: Icon(Icons.stars_outlined),
-              title: Text(folder!),
+              title: Text(folderList.join(", ")),
             ),
             Text(
               "Automatic update checking enabled.".tl,
               style: ts.s14,
             ).paddingHorizontal(16),
             Text(
-              "The app will check for updates at most once a day.".tl,
+              "@n folders are being tracked.".tlParams({'n': folderList.length}),
               style: ts.s14,
             ).paddingHorizontal(16),
             const SizedBox(height: 8),
@@ -471,37 +491,50 @@ class _FollowUpdatesPageState extends AutomaticGlobalState<FollowUpdatesPage> {
   }
 
   void showSelector() {
-    var folders = LocalFavoritesManager().folderNames;
-    if (folders.isEmpty) {
+    var allFolders = LocalFavoritesManager().folderNames;
+    if (allFolders.isEmpty) {
       context.showMessage(message: "No folders available".tl);
       return;
     }
-    String? selectedFolder;
+    var selectedFolders = Set<String>.from(folders);
     showDialog(
       context: App.rootContext,
       builder: (context) {
         return StatefulBuilder(builder: (context, setState) {
           return ContentDialog(
             title: "Choose Folder".tl,
-            content: Column(
-              children: [
-                ListTile(
-                  title: Text("Folder".tl),
-                  trailing: Select(
-                    minWidth: 120,
-                    current: selectedFolder,
-                    values: folders,
-                    onTap: (i) {
+            content: SizedBox(
+              width: 320,
+              height: 420,
+              child: ListView(
+                children: allFolders.map((f) {
+                  return CheckboxListTile(
+                    dense: true,
+                    title: Text(f),
+                    value: selectedFolders.contains(f),
+                    onChanged: (v) {
                       setState(() {
-                        selectedFolder = folders[i];
+                        if (v == true) {
+                          selectedFolders.add(f);
+                        } else {
+                          selectedFolders.remove(f);
+                        }
                       });
                     },
-                  ),
-                ),
-              ],
+                  );
+                }).toList(),
+              ),
             ),
             actions: [
-              if (appdata.settings["followUpdatesFolder"] != null)
+              TextButton(
+                onPressed: () {
+                  setState(() {
+                    selectedFolders.clear();
+                  });
+                },
+                child: Text("Clear".tl),
+              ),
+              if (folders.isNotEmpty)
                 TextButton(
                   onPressed: () {
                     disable();
@@ -510,11 +543,11 @@ class _FollowUpdatesPageState extends AutomaticGlobalState<FollowUpdatesPage> {
                   child: Text("Disable".tl),
                 ),
               FilledButton(
-                onPressed: selectedFolder == null
+                onPressed: selectedFolders.isEmpty
                     ? null
                     : () {
                         context.pop();
-                        setFolder(selectedFolder!);
+                        setFolders(selectedFolders.toList());
                       },
                 child: Text("Confirm".tl),
               ),
@@ -526,118 +559,122 @@ class _FollowUpdatesPageState extends AutomaticGlobalState<FollowUpdatesPage> {
   }
 
   void disable() {
+    appdata.settings["followUpdatesFolders"] = null;
     appdata.settings["followUpdatesFolder"] = null;
     appdata.saveData();
     updateFollowUpdatesUI();
   }
 
-  void setFolder(String folder) async {
+  void setFolders(List<String> newFolders) async {
     FollowUpdatesService._cancelChecking?.call();
-    LocalFavoritesManager().prepareTableForFollowUpdates(folder);
 
-    var count = LocalFavoritesManager().count(folder);
-
-    if (count > 0) {
-      bool isCanceled = false;
-
-      final progressNotifier = ValueNotifier<UpdateProgress?>(
-        UpdateProgress(0, 0, 0, 0),
-      );
-
-      var dialogRoute = DialogRoute(
-        context: App.rootContext,
-        barrierDismissible: false,
-        builder: (BuildContext context) {
-          return ContentDialog(
-            title: "Checking Updates".tl,
-            content: ValueListenableBuilder<UpdateProgress?>(
-              valueListenable: progressNotifier,
-              builder: (context, progress, _) {
-                var current = progress?.current ?? 0;
-                var total = progress?.total ?? 0;
-                var updated = progress?.updated ?? 0;
-                var errors = progress?.errors ?? 0;
-                var comicName = progress?.comic?.name;
-                return Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (comicName != null && !isCanceled)
-                      Text(
-                        comicName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: ts.s14,
-                      ).paddingVertical(4),
-                    LinearProgressIndicator(
-                      value: total > 0 ? current / total : null,
-                      backgroundColor: context.colorScheme.surfaceContainer,
-                    ).paddingVertical(8),
-                    Row(
-                      children: [
-                        Text("$current / $total", style: ts.s14),
-                        const Spacer(),
-                        if (updated > 0)
-                          Padding(
-                            padding: const EdgeInsets.only(right: 12),
-                            child: Row(
-                              children: [
-                                Icon(Icons.update, size: 16,
-                                    color: context.colorScheme.primary),
-                                const SizedBox(width: 4),
-                                Text("$updated", style: ts.s14),
-                              ],
-                            ),
-                          ),
-                        if (errors > 0)
-                          Row(
-                            children: [
-                              Icon(Icons.error_outline, size: 16,
-                                  color: context.colorScheme.error),
-                              const SizedBox(width: 4),
-                              Text("$errors", style: ts.s14),
-                            ],
-                          ),
-                      ],
-                    ),
-                  ],
-                ).paddingVertical(8);
-              },
-            ).paddingHorizontal(16),
-            actions: [
-              TextButton(
-                onPressed: () {
-                  isCanceled = true;
-                  Navigator.of(context, rootNavigator: true).pop();
-                },
-                child: Text("Cancel".tl),
-              ),
-            ],
-          );
-        },
-      );
-
-      var navigator = Navigator.of(App.rootContext, rootNavigator: true);
-      navigator.push(dialogRoute);
-
-      await for (var progress in updateFolder(folder, true)) {
-        if (isCanceled) {
-          navigator.removeRoute(dialogRoute);
-          progressNotifier.dispose();
-          return;
-        }
-        progressNotifier.value = progress;
-      }
-
-      navigator.removeRoute(dialogRoute);
-      progressNotifier.dispose();
+    for (var folder in newFolders) {
+      LocalFavoritesManager().prepareTableForFollowUpdates(folder);
     }
 
+    bool isCanceled = false;
+
+    final progressNotifier = ValueNotifier<UpdateProgress?>(
+      UpdateProgress(0, 0, 0, 0),
+    );
+
+    var dialogRoute = DialogRoute(
+      context: App.rootContext,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return ContentDialog(
+          title: "Checking Updates".tl,
+          content: ValueListenableBuilder<UpdateProgress?>(
+            valueListenable: progressNotifier,
+            builder: (context, progress, _) {
+              var current = progress?.current ?? 0;
+              var total = progress?.total ?? 0;
+              var updated = progress?.updated ?? 0;
+              var errors = progress?.errors ?? 0;
+              var comicName = progress?.comic?.name;
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (comicName != null && !isCanceled)
+                    Text(
+                      comicName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: ts.s14,
+                    ).paddingVertical(4),
+                  LinearProgressIndicator(
+                    value: total > 0 ? current / total : null,
+                    backgroundColor: context.colorScheme.surfaceContainer,
+                  ).paddingVertical(8),
+                  Row(
+                    children: [
+                      Text("$current / $total", style: ts.s14),
+                      const Spacer(),
+                      if (updated > 0)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 12),
+                          child: Row(
+                            children: [
+                              Icon(Icons.update, size: 16,
+                                  color: context.colorScheme.primary),
+                              const SizedBox(width: 4),
+                              Text("$updated", style: ts.s14),
+                            ],
+                          ),
+                        ),
+                      if (errors > 0)
+                        Row(
+                          children: [
+                            Icon(Icons.error_outline, size: 16,
+                                color: context.colorScheme.error),
+                            const SizedBox(width: 4),
+                            Text("$errors", style: ts.s14),
+                          ],
+                        ),
+                    ],
+                  ),
+                ],
+              ).paddingVertical(8);
+            },
+          ).paddingHorizontal(16),
+          actions: [
+            TextButton(
+              onPressed: () {
+                isCanceled = true;
+                Navigator.of(context, rootNavigator: true).pop();
+              },
+              child: Text("Cancel".tl),
+            ),
+          ],
+        );
+      },
+    );
+
+    var navigator = Navigator.of(App.rootContext, rootNavigator: true);
+    navigator.push(dialogRoute);
+
+    for (var folder in newFolders) {
+      var count = LocalFavoritesManager().count(folder);
+      if (count > 0) {
+        await for (var progress in updateFolder(folder, true)) {
+          if (isCanceled) {
+            navigator.removeRoute(dialogRoute);
+            progressNotifier.dispose();
+            return;
+          }
+          progressNotifier.value = progress;
+        }
+      }
+    }
+
+    navigator.removeRoute(dialogRoute);
+    progressNotifier.dispose();
+
     setState(() {
-      appdata.settings["followUpdatesFolder"] = folder;
-      updatedComics = [];
-      allComics = LocalFavoritesManager().getComicsWithUpdatesInfo(folder);
-      sortComics();
+      appdata.settings["followUpdatesFolders"] = newFolders;
+      appdata.settings["followUpdatesFolder"] = null;
+      _loadAllFolders();
     });
     appdata.saveData();
   }
@@ -729,14 +766,17 @@ class _FollowUpdatesPageState extends AutomaticGlobalState<FollowUpdatesPage> {
 
     int updated = 0;
 
-    await for (var progress in updateFolder(folder!, true)) {
-      if (isCanceled) {
-        navigator.removeRoute(dialogRoute);
-        progressNotifier.dispose();
-        return;
+    for (var folder in folders) {
+      if (!LocalFavoritesManager().folderNames.contains(folder)) continue;
+      await for (var progress in updateFolder(folder, true)) {
+        if (isCanceled) {
+          navigator.removeRoute(dialogRoute);
+          progressNotifier.dispose();
+          return;
+        }
+        progressNotifier.value = progress;
+        updated += progress.updated;
       }
-      progressNotifier.value = progress;
-      updated = progress.updated;
     }
 
     navigator.removeRoute(dialogRoute);
@@ -749,17 +789,8 @@ class _FollowUpdatesPageState extends AutomaticGlobalState<FollowUpdatesPage> {
   }
 
   void updateComics() {
-    if (folder == null) {
-      setState(() {
-        allComics = [];
-        updatedComics = [];
-      });
-      return;
-    }
     setState(() {
-      allComics = LocalFavoritesManager().getComicsWithUpdatesInfo(folder!);
-      sortComics();
-      updatedComics = allComics.where((c) => c.hasNewUpdate).toList();
+      _loadAllFolders();
     });
   }
 
@@ -779,8 +810,8 @@ abstract class FollowUpdatesService {
     if (_isChecking) {
       return;
     }
-    var folder = appdata.settings["followUpdatesFolder"];
-    if (folder == null) {
+    var folders = LocalFavoritesManager().followUpdateFolders;
+    if (folders.isEmpty) {
       return;
     }
     bool isCanceled = false;
@@ -796,11 +827,14 @@ abstract class FollowUpdatesService {
 
     int updated = 0;
     try {
-      await for (var progress in updateFolder(folder, false)) {
-        if (isCanceled) {
-          return;
+      for (var folder in folders) {
+        if (!LocalFavoritesManager().existsFolder(folder)) continue;
+        await for (var progress in updateFolder(folder, false)) {
+          if (isCanceled) {
+            return;
+          }
+          updated += progress.updated;
         }
-        updated = progress.updated;
       }
     } finally {
       _cancelChecking = null;
@@ -814,10 +848,19 @@ abstract class FollowUpdatesService {
 
   static void _showUpdateNotification(int count) {
     if (count <= 0) return;
+    // Re-count updates excluding comics from hidden sources.
+    var visibleCount = 0;
+    for (var folder in LocalFavoritesManager().followUpdateFolders) {
+      visibleCount += LocalFavoritesManager()
+          .getUpdates(folder)
+          .where((c) => c.type.comicSource?.hidden != true)
+          .length;
+    }
+    if (visibleCount <= 0) return;
     // Store as persistent notification so it survives app restarts
     // and stays visible until the user acts on it.
     appdata.settings['pendingUpdateNotification'] = {
-      'count': count,
+      'count': visibleCount,
       'time': DateTime.now().millisecondsSinceEpoch,
     };
     appdata.saveData();
@@ -828,6 +871,12 @@ abstract class FollowUpdatesService {
   static void initChecker() {
     if (_isInitialized) return;
     _isInitialized = true;
+    // Make sure all follow-updates folder tables have the required columns.
+    for (var folder in LocalFavoritesManager().followUpdateFolders) {
+      if (LocalFavoritesManager().existsFolder(folder)) {
+        LocalFavoritesManager().prepareTableForFollowUpdates(folder, false);
+      }
+    }
     _check();
     DataSync().addListener(updateFollowUpdatesUI);
     // A short interval will not affect the performance since every comic has a check time.

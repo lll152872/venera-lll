@@ -53,6 +53,10 @@ class _LocalFavoritesPageState extends State<_LocalFavoritesPage> {
 
   static const sortTypeList = ['default', 'name', 'time_desc', 'time_asc'];
 
+  /// Cache of (id, type.value) pairs that have new updates in any
+  /// follow-updates folder. Used to show update badges.
+  Set<(String, int)> _updateStatusMap = {};
+
   var searchResults = <FavoriteItem>[];
 
   void updateSearchResult() {
@@ -90,6 +94,7 @@ class _LocalFavoritesPageState extends State<_LocalFavoritesPage> {
               isLoading = false;
               comics = value;
             });
+            _updateStatusMap = LocalFavoritesManager().getUpdateStatusMap();
           }
         });
       }
@@ -108,11 +113,13 @@ class _LocalFavoritesPageState extends State<_LocalFavoritesPage> {
               isLoading = false;
               comics = value;
             });
+            _updateStatusMap = LocalFavoritesManager().getUpdateStatusMap();
           }
         });
       }
     }
     setState(() {});
+    _updateStatusMap = LocalFavoritesManager().getUpdateStatusMap();
   }
 
   List<FavoriteItem> filterComics(List<FavoriteItem> curComics) {
@@ -677,6 +684,14 @@ class _LocalFavoritesPageState extends State<_LocalFavoritesPage> {
           SliverGridComics(
             comics: searchMode ? searchResults : filterComics(comics),
             selections: selectedComics,
+            badgeBuilder: (comic) {
+              if (_updateStatusMap.isEmpty) return null;
+              var typeValue = (comic as FavoriteItem).type.value;
+              if (_updateStatusMap.contains((comic.id, typeValue))) {
+                return "已更新".tl;
+              }
+              return null;
+            },
             menuBuilder: (c) {
               return [
                 if (!isAllFolder)

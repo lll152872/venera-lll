@@ -176,8 +176,11 @@ Stream<UpdateProgress> updateFolder(String folder, bool ignoreCheckTime) {
   return stream.stream;
 }
 
-Future<String> getUpdatedComicsAsJson(String folder) async {
-  var comics = LocalFavoritesManager().getComicsWithUpdatesInfo(folder);
+Future<String> getUpdatedComicsAsJson(List<String> folders) async {
+  var comics = <FavoriteItemWithUpdateInfo>[];
+  for (var folder in folders) {
+    comics.addAll(LocalFavoritesManager().getComicsWithUpdatesInfo(folder));
+  }
   var updatedComics = comics.where((c) => c.hasNewUpdate).toList();
   var jsonList = updatedComics.map((c) => {
     'id': c.id,
