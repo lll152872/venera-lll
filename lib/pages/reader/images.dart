@@ -917,6 +917,11 @@ class _ContinuousModeState extends State<_ContinuousMode>
     //     → pixels 和实际渲染位置脱节 → "显示 p16 但内容到下一章"
     // 同时影响 unloadExcess：如果 _pageHeights 有残留，平移后补偿也不准。
     _pageHeights.clear();
+    // 必须同步清空 _itemContexts：旧章 item 的 context 还挂在 ListView 上，
+    // 若不清，_currentPageFromViewport 会用旧章 item 的渲染位置反算 gp，
+    // 在新 spliced 上查错章节 → 点下一章回退到上一章。
+    // 旧 State 的 dispose 仍会调 onUnregister（remove），无害。
+    _itemContexts.clear();
     _lastSyncedGp = -1;
   }
 
@@ -927,10 +932,14 @@ class _ContinuousModeState extends State<_ContinuousMode>
   /// is clearly inside the middle of the target chapter, not on its edge.
   void _updateReaderStateForSpliced(int globalPage) {
     var (int chap, int localPage, int chapLen) = _spliced.chapterOfPage(globalPage);
-    reader._dbg('[DBG] _updateReaderStateForSpliced IN gp=$globalPage -> chap=$chap localPage=$localPage chapLen=$chapLen curChapter=${reader.chapter} suppress=$_suppressPrepend append=${_spliced.appendingNext} prepend=${_spliced.prependingPrev}');
+    reader._dbg('[DBG] _updateReaderStateForSpliced IN gp=$globalPage -> chap=$chap localPage=$localPage chapLen=$chapLen curChapter=${reader.chapter} suppress=$_suppressPrepend append=${_spliced.appendingNext} prepend=${_spliced.prependingPrev} loading=${reader.isLoading}');
     // 拼接过渡/跳转过渡期间不更新 chapter（避免过渡帧反算错误导致回跳），
     // 只更新 page。legado 式：章节由显式切章持有，不靠 listener 反算。
+    // !reader.isLoading：changeChapter 异步加载窗口期内（spliced 仍是旧章拼接、
+    // _itemContexts 仍是旧章 item），反算出的 chap 是旧章，必须抑制切章，
+    // 否则"点下一章 → 回退到上一章"（reader.chapter 被 listener 改回）。
     if (reader.chapter != chap &&
+        !reader.isLoading &&
         !_spliced.prependingPrev &&
         !_spliced.appendingNext &&
         !_suppressPrepend) {
@@ -943,7 +952,9 @@ class _ContinuousModeState extends State<_ContinuousMode>
         reader.images = _spliced.imagesForChapter(chap);
       }
     }
-    if (reader.page != localPage) {
+    // 窗口期（isLoading）内也不更新 page，保持 changeChapter 设置的 page=1，
+    // 避免加载完成后 onChapterLoaded 的 jumpTo(_offsetForGp(reader.page)) 跳到错误页。
+    if (!reader.isLoading && reader.page != localPage) {
       reader.setPage(localPage);
       context.readerScaffold.update();
     }
