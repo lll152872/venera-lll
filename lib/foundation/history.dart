@@ -402,15 +402,19 @@ void clearUnfavoritedHistory() {
   }
 
   /// 获取最近阅读的漫画
+  ///
+  /// 先按时间倒序全量读取，再在内存中过滤隐藏源，最后取前 20 条。
+  /// 不能先 `limit 20` 再过滤——否则隐藏源记录会挤压可见历史的展示名额，
+  /// 导致首页「History」小框在隐藏源较多时只剩极少几条。
   List<History> getRecent() {
     var res = _db.select("""
       select * from history
-      order by time DESC
-      limit 20;
+      order by time DESC;
     """);
     return res
         .map((element) => History.fromRow(element))
         .where((h) => ComicSource.fromIntKey(h.type.value)?.hidden != true)
+        .take(20)
         .toList();
   }
 
