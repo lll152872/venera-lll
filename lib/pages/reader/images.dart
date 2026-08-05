@@ -1264,6 +1264,15 @@ class ContinuousModeState extends State<ContinuousMode>
     // 页码由 item 实际渲染位置决定（_currentPageFromViewport），
     // 不再依赖 _pageHeights 像素累加反算——彻底消除异步高度变化导致的页码错位。
     int gp = _currentPageFromViewport();
+    // 硬拦截 gp 突变（非 append 期间）：图片加载高度变化导致 ListView 重排，
+    // 重排帧内 RenderBox 瞬时坐标可能异常 → leading edge 取错 → gp 回退多章。
+    // 正常滚动一帧不可能跳 >15 页，超过此阈值直接丢弃本次同步。
+    const int kGpJumpReject = 15;
+    if (_lastSyncedGp >= 0 && (gp - _lastSyncedGp).abs() > kGpJumpReject && !_spliced.appendingNext) {
+      reader.dbg('[DBG] _syncReaderState GP REJECTED gp=$gp last=$_lastSyncedGp delta=${gp - _lastSyncedGp}');
+      _cacheSplicedImages(_lastSyncedGp);
+      return;
+    }
     String flag = '';
     if (_lastSyncedGp >= 0 && (gp - _lastSyncedGp).abs() > 3 && !_spliced.appendingNext) {
       flag = ' <<< GP JUMP (delta=${gp - _lastSyncedGp}, no splice active)';
