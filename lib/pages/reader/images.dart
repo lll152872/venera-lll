@@ -1082,7 +1082,10 @@ class ContinuousModeState extends State<ContinuousMode>
   /// 可见 item 通常 3-5 个，遍历成本可忽略。
   int _currentPageFromViewport() {
     if (_itemContexts.isEmpty || _spliced.length == 0) {
-      return reader.page.clamp(1, _spliced.length > 0 ? _spliced.length : 1);
+      // 注册表为空 = 过渡帧（ListView 回收了所有可见 item 但新 item 还没 build）。
+      // 不能用 reader.page（可能是几章前的旧值），用 _lastSyncedGp 兜底。
+      final fallback = _lastSyncedGp > 0 ? _lastSyncedGp : reader.page;
+      return fallback.clamp(1, _spliced.length > 0 ? _spliced.length : 1);
     }
     final bool horizontal = reader.mode != ReaderMode.continuousTopToBottom;
     // reverse（continuousRightToLeft）：列表从右往左排，leading edge 在右侧。
