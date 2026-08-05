@@ -109,7 +109,8 @@ class Reader extends StatefulWidget {
 }
 
 class _ReaderState extends State<Reader>
-    with _ReaderLocation, _ReaderWindow, _VolumeListener, _ImagePerPageHandler {
+    with _ReaderLocation, _ReaderWindow, _VolumeListener, _ImagePerPageHandler
+    implements ReaderView {
   @override
   void update() {
     setState(() {});
@@ -172,6 +173,16 @@ class _ReaderState extends State<Reader>
   String get cid => widget.cid;
 
   String get eid => widget.chapters?.ids.elementAtOrNull(chapter - 1) ?? '0';
+
+  /// Exposes [widget.chapters?.ids] via the [ReaderView] seam so that
+  /// [ContinuousModeState] does not reach into `reader.widget` directly.
+  @override
+  Iterable<String>? get chapterIds => widget.chapters?.ids;
+
+  /// Public wrapper around the private `_dbg` debug logger, exposed via
+  /// [ReaderView] so widget tests can route debug output through a callback.
+  @override
+  void dbg(String s) => _dbg(s);
 
   @override
   List<String>? images;
@@ -427,6 +438,7 @@ class _ReaderState extends State<Reader>
 
   /// Get the size of the reader.
   /// The size is not always the same as the size of the screen.
+  @override
   Size get size {
     var renderBox = context.findRenderObject() as RenderBox;
     return renderBox.size;

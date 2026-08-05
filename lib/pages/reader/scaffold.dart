@@ -875,7 +875,7 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
           needsSelection = true;
         }
       }
-    } else if (imageViewController is _ContinuousModeState) {
+    } else if (imageViewController is ContinuousModeState) {
       needsSelection = false;
       singleImageIndex = reader.page - 1;
     }

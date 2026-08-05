@@ -81,7 +81,7 @@ class ComicImage extends StatefulWidget {
   /// 同步查询某 [provider] 是否已有缓存的图片尺寸（legado 式预排版预测量）。
   ///
   /// 命中返回真实 [Size]（像素），未命中返回 null。
-  /// 由 `_ContinuousModeState._buildSplicedItem` 在 build 前调用，
+  /// 由 `ContinuousModeState._buildSplicedItem` 在 build 前调用，
   /// 让 `_pageHeights[index]` 第一次就拿到终值，避免占位→真实的高度突变
   /// 导致页码/章节乱跳。
   static Size? cachedSizeFor(ImageProvider provider) {
