@@ -105,9 +105,13 @@ flutter build windows --release --no-pub
 
 `build\windows\x64\runner\Release\`（含 `venera.exe`、`flutter_windows.dll`、各插件 `.dll` 和 `data/`），共 23 个文件。
 
-### 4.5 文字规范
+### 4.5 文字规范（2026-08-03 实测修正，覆盖旧版"全中文"约定）
 
-批处理脚本的 `echo` / 提示 / 报错文字必须**全中文**，禁英文单词（用户对脚本可读性敏感）。
+批处理脚本必须**纯 ASCII 英文**（含注释、echo 全部），**禁中文**。
+
+- **原因（两次实测踩坑）**：cmd 按 GBK 代码页解析 .bat。UTF-8 无 BOM 的中文注释/echo 会多字节错位，把命令行拆散（`flutter_rust_bridge`→`st_bridge`、`package_config`→`kage_config`、中文被当命令），`chcp 65001` 也救不了（cmd 边读边解析，前面行已按 GBK 拆坏）。
+- 校验：`grep -P '[^\x00-\x7F]' build-win.bat` 应无输出；换行必须是 CRLF。
+- 输出日期等由 `%DATE%`/`%TIME%` 提供（系统语言输出中文周几没问题，那不是文件内容）。
 
 ### 4.6 报 "flutter rust bridge has not been initialized" → build 环境异常（非运行时问题）
 
@@ -118,6 +122,23 @@ flutter build windows --release --no-pub
 - 修复：删 `.dart_tool/package_config.json` + `unset PUB_HOSTED_URL FLUTTER_STORAGE_BASE_URL` + 走 pub.dev `flutter pub get`，再 `build-win.bat` 重建
 
 遇到此报错**先按第 3 节诊断，不要猜、不要打补丁**。
+
+### 4.7 bat 运行窗口「停留 + 看结果」最终方案（2026-08-03 定稿）
+
+用户双击 bat 的要求：跑完**窗口不消失**、能看到结果、按任意键才关。踩过 N 轮坑后定稿结构：
+
+1. **flutter 命令必须 `< nul`**：`flutter analyze %* < nul >> xxx_log.txt 2>&1`。
+   - 作用一：stdout+stderr 全落日志；
+   - 作用二：stdin 指向 nul 设备，**Dart 不再碰控制台键盘句柄** → 后续 `pause` 才能正常等键（之前"pause 不可用"就是因为 flutter 吃掉了控制台 stdin，读 EOF 秒过）。
+2. **末尾打印结果摘要到控制台**：`echo ANALYZE PASSED/FAILED` + 日志绝对路径。
+3. **`start /min "" notepad.exe "绝对路径\xxx_log.txt"`**：最小化打开日志（不抢焦点，cmd 关了 Notepad 也留着）。
+4. **裸 `pause`** 等任意键，按完才 `exit /b %EXIT%`。**不要用 `ping -n 6` 顶窗**（5 秒太短，用户感知还是"消失"）；**不要 `pause > nul`**（重定向写法本机不可靠，曾有 `pause > null` 手滑创建垃圾文件）。
+
+**铁律汇总**：
+- bat 纯 ASCII 英文 + CRLF（见 4.5）；
+- flutter/dart 长命令必须 `< nul`（否则后续 pause 失效）；
+- 结尾停留用裸 `pause`，不用 ping、不用 pause 重定向；
+- 结果必须同时落日志文件（Notepad 打开），不依赖控制台显示。
 
 ## 5. Flutter SDK 目录按真实版本命名（版本号不致命）
 

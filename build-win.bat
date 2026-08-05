@@ -1,103 +1,72 @@
 @echo off
 setlocal
-setlocal EnableDelayedExpansion
-chcp 65001 > nul
-
-REM ============================================================
-REM Venera 本地构建脚本（Windows exe）
-REM
-REM 用法：
-REM   build-win.bat            仅编译 exe（默认）
-REM   build-win.bat run        编译 exe 后启动
-REM   build-win.bat clean      清理 build\windows + ephemeral 后编译
-REM   build-win.bat rebuild    清理 + 编译 + 启动
-REM
-REM 默认行为：build exe（不启动，避免启动后运行时崩溃掩盖编译错误）
-REM 必须用 `cmd /c build-win.bat` 调用，git-bash 不能直接执行
-REM ============================================================
 
 cd /d D:\mycode\venera
 
-set "DO_RUN=0"
-set "DO_CLEAN=0"
-set "ACTION=编译"
+REM 1. Clear pub mirror env vars (prevents FRB version corruption)
+set "PUB_HOSTED_URL="
+set "FLUTTER_STORAGE_BASE_URL="
 
-if /i "%1"=="run" (
-    set "DO_RUN=1"
-    set "ACTION=编译并启动"
-)
-if /i "%1"=="clean" (
-    set "DO_CLEAN=1"
-    set "ACTION=清理后编译"
-)
-if /i "%1"=="rebuild" (
-    set "DO_CLEAN=1"
-    set "DO_RUN=1"
-    set "ACTION=清理后编译并启动"
-)
-
-echo ============================================================
-echo  模式：%ACTION%
-echo  产物：build\windows\x64\runner\Release\venera.exe
-echo ============================================================
-
-REM 1. 清理（如需）
-if %DO_CLEAN%==1 (
-    echo [1/3] 清理旧产物...
-    if exist build\windows rmdir /s /q build\windows
-    if exist windows\flutter\ephemeral rmdir /s /q windows\flutter\ephemeral
-)
-
-REM 2. PATH 必须包含 Flutter SDK 和 nuget
+REM 2. PATH must include Flutter SDK and nuget
 set "PATH=D:\edge;D:\flutter_3.44.0\bin;%PATH%"
 
-REM 3. 编译
-echo [编译] flutter build windows --release --no-pub
-flutter build windows --release --no-pub
-if errorlevel 1 (
-    echo.
-    echo ========== 编译失败 ==========
-    pause
-    exit /b 1
+REM 3. Start logging everything to a file
+echo ============================================================ > build_log.txt
+echo   BUILD-WIN.BAT started: %DATE% %TIME% >> build_log.txt
+where flutter >> build_log.txt 2>&1
+echo ============================================================ >> build_log.txt
+echo. >> build_log.txt
+
+REM 4. Build Windows release (--no-pub skips pub get, keeps current package_config)
+echo [BUILD] flutter build windows --release --no-pub >> build_log.txt
+flutter build windows --release --no-pub < nul >> build_log.txt 2>&1
+
+set "BUILD_EXIT=%errorlevel%"
+echo. >> build_log.txt
+echo ============================================================ >> build_log.txt
+echo   BUILD EXIT CODE: %BUILD_EXIT% >> build_log.txt
+
+if not "%BUILD_EXIT%"=="0" (
+    echo [BUILD FAILED] >> build_log.txt
+    goto :showlog
 )
 
-REM 4. 验证产物完整性
-echo [验证] 检查关键 dll...
-set "MISSING=0"
-for %%F in (venera.exe sqlite3.dll flutter_windows.dll) do (
-    set "FILE=build\windows\x64\runner\Release\%%F"
-    if not exist !FILE! (
-        echo   缺失：%%F
-        set "MISSING=1"
-    ) else (
-        for %%S in ("!FILE!") do echo   ✓ %%F ^(%%~zS 字节^)
-    )
-)
-if !MISSING!==1 (
-    echo 错误：关键文件缺失
-    pause
-    exit /b 1
-)
-
-REM 5. sqlite3.dll 大小校验（防止空壳）
+REM 5. Verify sqlite3.dll is not an empty stub
 for %%F in (build\windows\x64\runner\Release\sqlite3.dll) do (
     if %%~zF LSS 100000 (
-        echo 错误：sqlite3.dll 太小（%%~zF 字节），可能是空壳
-        pause
-        exit /b 1
+        echo [ERROR] sqlite3.dll too small (%%~zF bytes), maybe empty stub >> build_log.txt
+        goto :showlog
     )
 )
+echo [OK] build succeeded, sqlite3.dll present >> build_log.txt
 
-echo.
-echo ========== 完成 ==========
-echo 产物：build\windows\x64\runner\Release\venera.exe
-
-REM 6. 可选：启动
-if %DO_RUN%==1 (
-    echo 启动 exe...
+REM 6. Optional launch if caller passed "run"
+if "%~1"=="run" (
+    echo launching exe... >> build_log.txt
     start "" build\windows\x64\runner\Release\venera.exe
-) else (
-    echo 默认未启动。如需启动请用：build-win.bat run
 )
 
+:showlog
+echo ============================================================ >> build_log.txt
+echo   Finished: %DATE% %TIME% >> build_log.txt
+echo ============================================================ >> build_log.txt
+
+REM 7. Show result summary in this console window
+echo.
+echo ============================================================
+if "%BUILD_EXIT%"=="0" (
+    echo   BUILD SUCCEEDED.
+    echo   EXE: D:\mycode\venera\build\windows\x64\runner\Release\venera.exe
+) else (
+    echo   BUILD FAILED - exit code %BUILD_EXIT%.
+)
+echo   Full log: D:\mycode\venera\build_log.txt
+echo ============================================================
+echo.
+
+REM 8. Open the log minimized (separate window, will NOT steal focus)
+start /min "" notepad.exe "D:\mycode\venera\build_log.txt"
+
+REM 9. Keep this window open until a key is pressed
 pause
+exit /b %BUILD_EXIT%

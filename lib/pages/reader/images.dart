@@ -625,12 +625,9 @@ class SplicedChapters {
   List<int> _chapLens = [];
 
   bool appendingNext = false;
-  bool prependingPrev = false;
   bool allNextLoaded = false;
-  bool allPrevLoaded = false;
 
   static const int kPreloadAhead = 10;
-  static const int kMaxChaptersInMemory = 10;
 
   int get length => images.length;
   int get chapterCount => _chapNums.length;
@@ -643,9 +640,7 @@ class SplicedChapters {
     _chapNums = [chapterNum];
     _chapLens = [initialImages.length];
     appendingNext = false;
-    prependingPrev = false;
     allNextLoaded = false;
-    allPrevLoaded = false;
   }
 
   /// Returns (chapterNum, localPage, chapterLen) for the given global page.
@@ -688,41 +683,6 @@ class SplicedChapters {
     return imgs.length;
   }
 
-  /// Prepends the previous chapter's images to the start of the spliced list.
-  /// Returns the offset adjustment (number of images prepended) so the caller
-  /// can fix scroll position.
-  int prepend(List<String> imgs, int chapterNum) {
-    int plen = imgs.length;
-    images.insertAll(0, imgs);
-    for (int i = 0; i < _offsets.length; i++) {
-      _offsets[i] += plen;
-    }
-    _offsets.insert(0, 0);
-    _chapNums.insert(0, chapterNum);
-    _chapLens.insert(0, plen);
-    return plen;
-  }
-
-  /// Unloads excess chapters from the front, keeping at most
-  /// [kMaxChaptersInMemory] chapters in memory.
-  /// Returns the number of images removed from the front.
-  int unloadExcess() {
-    if (_offsets.length <= kMaxChaptersInMemory) return 0;
-    int totalRemoved = 0;
-    while (_offsets.length > kMaxChaptersInMemory) {
-      int removeCount = _chapLens[0];
-      images.removeRange(0, removeCount);
-      _offsets.removeAt(0);
-      _chapNums.removeAt(0);
-      _chapLens.removeAt(0);
-      for (int i = 0; i < _offsets.length; i++) {
-        _offsets[i] -= removeCount;
-      }
-      totalRemoved += removeCount;
-    }
-    return totalRemoved;
-  }
-
   /// Whether the spliced list should try appending the next chapter.
   bool shouldAppendNext(int currentGp) {
     if (appendingNext || allNextLoaded) return false;
@@ -733,23 +693,10 @@ class SplicedChapters {
     return true;
   }
 
-  /// Whether the spliced list should try prepending the previous chapter.
-  bool shouldPrependPrev(int currentGp, bool suppressed) {
-    if (suppressed || prependingPrev || allPrevLoaded) return false;
-    if (currentGp > kPreloadAhead + 1) return false;
-    // 防重复：前一章若已在拼接列表中则不再 prepend
-    int prev = firstChapterNum - 1;
-    if (prev < 1 || _chapNums.contains(prev)) return false;
-    return true;
-  }
-
   void markAppending(bool v) => appendingNext = v;
-  void markPrepending(bool v) => prependingPrev = v;
   void markAllNextLoaded() => allNextLoaded = true;
-  void markAllPrevLoaded() => allPrevLoaded = true;
 
   int get lastChapterNum => _chapNums.last;
-  int get firstChapterNum => _chapNums.first;
 
   /// Whether a chapter number is already spliced into the list.
   bool containsChapter(int n) => _chapNums.contains(n);
@@ -821,7 +768,7 @@ class _ItemContextRegistrarState extends State<_ItemContextRegistrar> {
     widget.onRegister(widget.index, context);
   }
 
-  /// 元素复用（同 imageKey、index 变化，如 prepend/unloadExcess 平移）时，
+  /// 元素复用（同 imageKey、index 变化）时，
   /// didChangeDependencies 不会再调——必须在这里注销旧 index、注册新 index，
   /// 否则 _itemContexts 的 key 是旧 index、context 指向新 index 的位置（腐化）。
   @override
@@ -868,9 +815,6 @@ class ContinuousModeState extends State<ContinuousMode>
   bool isLongPressing = false;
 
   /// ── Tunable constants (kept here so timing/sizing is easy to find) ──
-  /// 解除 prepend 屏蔽的窗口：jumpTo 过渡帧约 2-3 帧后解除，
-  /// 期间不会因过渡帧报旧 gp 而连锁触发 prepend（legado 式）。
-  static const int kPrependSuppressWindowMs = 250;
   /// 滚动状态标志(用于禁双击翻页)的滞后设置窗口。
   static const int kScrollingFlagDelayMs = 300;
   /// 进入阅读器后首次预加载图片的延迟（等首帧布局完成再缓存）。
@@ -962,9 +906,8 @@ class ContinuousModeState extends State<ContinuousMode>
     });
   }
 
-  /// Prefetch both neighbors of the current spliced window's edges.
+  /// Prefetch the next chapter of the current spliced window's end edge.
   void _prefetchNeighbors() {
-    _prefetchChapter(_spliced.firstChapterNum - 1);
     _prefetchChapter(_spliced.lastChapterNum + 1);
   }
 
@@ -973,13 +916,9 @@ class ContinuousModeState extends State<ContinuousMode>
   bool _scrollingForward = true;
 
   /// ── Chapter memory unloading ──
-  /// Delegated to SplicedChapters.unloadExcess().
-  /// cached[] markers for removed range are cleaned up here.
-
-  /// True after a chapter jump (toChapter) or prepend to suppress prepend
-  /// triggering during the jumpTo transition frames. Cleared after a fixed
-  /// delay window (legado-style: no async listener reverse-calc).
-  bool _suppressPrepend = false;
+  /// 已废弃（2026-08-05 对齐 Mangayomi）：不再从列表头部删章。
+  /// 只 append 不删列表项 → item index 永不平移 → 页码/滚动位置不受影响。
+  /// 图片内存由 Flutter ImageCache LRU 自动淘汰。
   void delayedSetIsScrolling(bool value) {
     Future.delayed(
       const Duration(milliseconds: kScrollingFlagDelayMs),
@@ -996,7 +935,7 @@ class ContinuousModeState extends State<ContinuousMode>
     //   - B1+B2 预测量只在 _pageHeights[index]==null 时填，不覆盖残留值
     //   - 用户滚到新章末尾继续到下一章(gp=11+)，_gpFromPixels 用旧章第 11 页高度算 gp
     //     → pixels 和实际渲染位置脱节 → "显示 p16 但内容到下一章"
-    // 同时影响 unloadExcess：如果 _pageHeights 有残留，平移后补偿也不准。
+    // 同时影响内存清理：如果 _pageHeights 有残留，平移后补偿也不准。
     _pageHeights.clear();
     // 必须同步清空 _itemContexts：旧章 item 的 context 还挂在 ListView 上，
     // 若不清，_currentPageFromViewport 会用旧章 item 的渲染位置反算 gp，
@@ -1013,17 +952,14 @@ class ContinuousModeState extends State<ContinuousMode>
   /// is clearly inside the middle of the target chapter, not on its edge.
   void _updateReaderStateForSpliced(int globalPage) {
     var (int chap, int localPage, int chapLen) = _spliced.chapterOfPage(globalPage);
-    reader.dbg('[DBG] _updateReaderStateForSpliced IN gp=$globalPage -> chap=$chap localPage=$localPage chapLen=$chapLen curChapter=${reader.chapter} suppress=$_suppressPrepend append=${_spliced.appendingNext} prepend=${_spliced.prependingPrev} loading=${reader.isLoading}');
+    reader.dbg('[DBG] _updateReaderStateForSpliced IN gp=$globalPage -> chap=$chap localPage=$localPage chapLen=$chapLen curChapter=${reader.chapter} suppress=0 append=${_spliced.appendingNext} loading=${reader.isLoading}');
     // 拼接过渡/跳转过渡期间不更新 chapter（避免过渡帧反算错误导致回跳），
-    // 只更新 page。legado 式：章节由显式切章持有，不靠 listener 反算。
-    // !reader.isLoading：changeChapter 异步加载窗口期内（spliced 仍是旧章拼接、
+    // 只更新 page。!reader.isLoading：changeChapter 异步加载窗口期内（spliced 仍是旧章拼接，
     // _itemContexts 仍是旧章 item），反算出的 chap 是旧章，必须抑制切章，
     // 否则"点下一章 → 回退到上一章"（reader.chapter 被 listener 改回）。
     if (reader.chapter != chap &&
         !reader.isLoading &&
-        !_spliced.prependingPrev &&
-        !_spliced.appendingNext &&
-        !_suppressPrepend) {
+        !_spliced.appendingNext) {
       // 滞后（hysteresis）：只在 gp 明确进入目标章中段（非边界页）时才切章，
       // 避免边界页归属抖动导致章节号反复回跳（legado 用连续 pageOffset 无此问题）。
       bool onBoundary = localPage <= 0 || localPage >= chapLen - 1;
@@ -1091,105 +1027,6 @@ class ContinuousModeState extends State<ContinuousMode>
     reader.dbg('[DBG] _appendNextChapter DONE appendedCh=$nextCh splicedLen=${_spliced.length}');
     _prefetchNeighbors(); // legado: keep next chapter ready for seamless switch
     _growCache(_spliced.length + kCacheGrowthPadding);
-    var removed = _spliced.unloadExcess();
-    if (removed > 0) {
-      // 平移 _pageHeights 的 key 保持与 spliced list 一致（用于 _offsetForGp 跳转估算）。
-      // 不再补偿 pixels——页码由 _currentPageFromViewport（item 实际位置）决定，
-      // 与 _pageHeights/pixels 解耦。
-      if (cached.length > removed) cached.removeRange(0, removed);
-      if (_pageHeights.isNotEmpty) {
-        final Map<int, double> shifted = {};
-        _pageHeights.forEach((k, v) {
-          if (k > removed) shifted[k - removed] = v;
-        });
-        _pageHeights
-          ..clear()
-          ..addAll(shifted);
-      }
-    }
-  }
-
-  Future<void> _prependPrevChapter() async {
-    // 读触发时的视口中心 gp（入口同步读，await 期间用户可能滚动，不能用之后的 gp）
-    int oldGp = _currentCenterGp();
-    reader.dbg('[DBG] _prependPrevChapter ENTER prependingPrev=${_spliced.prependingPrev} allPrevLoaded=${_spliced.allPrevLoaded} mounted=$mounted firstCh=${_spliced.firstChapterNum} oldGp=$oldGp');
-    if (_spliced.prependingPrev || _spliced.allPrevLoaded || !mounted) return;
-    if (_spliced.firstChapterNum <= 1) {
-      _spliced.markAllPrevLoaded();
-      reader.dbg('[DBG] _prependPrevChapter firstCh<=1, markAllPrevLoaded');
-      return;
-    }
-    _spliced.markPrepending(true);
-    int prevCh = _spliced.firstChapterNum - 1;
-    String eid = reader.chapterIds?.elementAtOrNull(prevCh - 1) ?? '';
-    if (eid.isEmpty) {
-      _spliced.markPrepending(false);
-      _spliced.markAllPrevLoaded();
-      reader.dbg('[DBG] _prependPrevChapter eid empty');
-      return;
-    }
-    // Legado-style: use prefetched page list if available (instant prepend),
-    // otherwise fetch from network.
-    List<String> pages;
-    if (_prefetchedChapters.containsKey(prevCh) && _prefetchedChapters[prevCh]!.isNotEmpty) {
-      pages = _prefetchedChapters[prevCh]!;
-      reader.dbg('[DBG] _prependPrevChapter using prefetched ch$prevCh (${pages.length} pages)');
-    } else {
-      var res = await reader.type.comicSource!.loadComicPages!(reader.cid, eid);
-      if (!mounted) return;
-      if (res.error) {
-        _spliced.markPrepending(false);
-        reader.dbg('[DBG] _prependPrevChapter loadComicPages ERROR ${res.errorMessage}');
-        return;
-      }
-      pages = res.data;
-    }
-    int plen = _spliced.prepend(pages, prevCh);
-    // 头部插入 plen 张图后，所有 index 整体 +plen，平移 _pageHeights 的 key
-    // 避免头部 stale 高度错配（legado 同步测量无此问题，这里手动维护）。
-    if (_pageHeights.isNotEmpty) {
-      final Map<int, double> shifted = {};
-      _pageHeights.forEach((k, v) => shifted[k + plen] = v);
-      _pageHeights
-        ..clear()
-        ..addAll(shifted);
-    }
-    // 显式设置 reader.chapter（对应 legado moveToPrevChapter 显式切章，不靠 listener 反算）
-    reader.chapter = prevCh;
-    reader.images = _spliced.imagesForChapter(prevCh);
-    setState(() {
-      _spliced.markPrepending(false);
-    });
-    // legado 式：prepend 完成后屏蔽后续 prepend 触发，固定延时窗口解除。
-    // 防止 jumpTo 过渡帧（ScrollablePositionedList 当帧报旧 gp）连锁触发。
-    _suppressPrepend = true;
-    _prefetchNeighbors(); // legado: keep prev chapter ready for seamless switch
-    reader.dbg('[DBG] _prependPrevChapter DONE prependedCh=$prevCh plen=$plen splicedLen=${_spliced.length} oldGp=$oldGp');
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        int target = oldGp + plen;
-        reader.dbg('[DBG] _prependPrevChapter postFrame jumpTo index=$target (oldGp=$oldGp plen=$plen)');
-        _scrollController.jumpTo(_offsetForGp(target));
-        // jumpTo 过渡帧（约 2-3 帧）后解除屏蔽，期间不会连锁触发
-        Future.delayed(const Duration(milliseconds: kPrependSuppressWindowMs), () {
-          if (mounted) _suppressPrepend = false;
-        });
-      }
-    });
-    _growCache(_spliced.length + kCacheGrowthPadding);
-    var removed = _spliced.unloadExcess();
-    if (removed > 0) {
-      // 平移 _pageHeights（同 _appendNextChapter，不再补偿 pixels）
-      if (_pageHeights.isNotEmpty) {
-        final Map<int, double> shifted = {};
-        _pageHeights.forEach((k, v) {
-          if (k > removed) shifted[k - removed] = v;
-        });
-        _pageHeights
-          ..clear()
-          ..addAll(shifted);
-      }
-    }
   }
 
   void _growCache(int minSize) {
@@ -1221,8 +1058,6 @@ class ContinuousModeState extends State<ContinuousMode>
       _cachedSize = _spliced.length + kCacheGrowthPadding;
       cached = List.filled(_cachedSize, false);
     }
-    // Suppress prepend on fresh init (covers chapter jump via toChapter)
-    _suppressPrepend = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && _placeholderPageHeight > 0) {
         _scrollController.jumpTo(_offsetForGp(reader.page));
@@ -1235,8 +1070,12 @@ class ContinuousModeState extends State<ContinuousMode>
     super.initState();
   }
 
-  /// 通过遍历可见 item 的 RenderBox 实际渲染位置，找视口中心对应的 item index。
+  /// 通过遍历可见 item 的 RenderBox 实际渲染位置，找滚动方向起始端
+  /// （leading edge）对应的 item index——即「第一个可见 item」。
   ///
+  /// 对齐 Mangayomi/Dartotsu：`itemPositions.first.index`（leading edge 最小
+  /// 的 item）。与「视口中心」相比更抗图片高度异步变化：中心位置随 item
+  /// 高度变化漂移，而起始端 item 是滚动方向最靠前的可见页，翻页语义更准。
   /// 替代 _gpFromPixels（像素累加反算），从根本上消除 _pageHeights 异步高度变化
   /// 导致的页码错位——页码不再依赖 _pageHeights，而是由 item 在视口中的实际位置决定。
   /// 图片高度怎么变、加载顺序怎么乱，item 的 RenderBox 位置是实时准确的。
@@ -1246,27 +1085,19 @@ class ContinuousModeState extends State<ContinuousMode>
       return reader.page.clamp(1, _spliced.length > 0 ? _spliced.length : 1);
     }
     final bool horizontal = reader.mode != ReaderMode.continuousTopToBottom;
-    // 视口中心在屏幕中的坐标
-    final viewport = context.findRenderObject();
-    double viewportCenter;
-    if (viewport is RenderBox && viewport.attached) {
-      final size = viewport.size;
-      viewportCenter = horizontal
-          ? viewport.localToGlobal(Offset(size.width / 2, 0)).dx
-          : viewport.localToGlobal(Offset(0, size.height / 2)).dy;
-    } else {
-      viewportCenter = horizontal
-          ? reader.size.width / 2
-          : reader.size.height / 2;
-    }
-    int best = reader.page;
-    double bestDist = double.infinity;
+    // reverse（continuousRightToLeft）：列表从右往左排，leading edge 在右侧。
+    final bool reverse = reader.mode == ReaderMode.continuousRightToLeft;
     // 视口在屏幕中的矩形（用于过滤 ListView cacheExtent 预构建的视口外缓存区 item，
     // 这些 item 的 context 也注册在 _itemContexts，但不参与页码竞争，否则报错 gp）
+    final viewport = context.findRenderObject();
     Rect? viewportRect;
     if (viewport is RenderBox && viewport.attached) {
       viewportRect = viewport.localToGlobal(Offset.zero) & viewport.size;
     }
+    int best = reader.page;
+    // 起始端坐标：垂直=top(dy)，水平非 reverse=left(dx)，水平 reverse=right(dx)。
+    // 找「沿滚动轴最靠前的可见 item」= 起始端坐标最小的 item。
+    double bestEdge = double.infinity;
     _itemContexts.forEach((index, ctx) {
       if (!ctx.mounted) return;
       final ro = ctx.findRenderObject();
@@ -1276,12 +1107,13 @@ class ContinuousModeState extends State<ContinuousMode>
         final itemRect = ro.localToGlobal(Offset.zero) & ro.size;
         if (!itemRect.overlaps(viewportRect)) return;
       }
-      final double itemCenter = horizontal
-          ? ro.localToGlobal(Offset(ro.size.width / 2, 0)).dx
-          : ro.localToGlobal(Offset(0, ro.size.height / 2)).dy;
-      final dist = (itemCenter - viewportCenter).abs();
-      if (dist < bestDist) {
-        bestDist = dist;
+      final double edge = horizontal
+          ? (reverse
+              ? ro.localToGlobal(Offset(ro.size.width, 0)).dx // 右侧边
+              : ro.localToGlobal(Offset.zero).dx) // 左侧边
+          : ro.localToGlobal(Offset.zero).dy; // 上边
+      if (edge < bestEdge) {
+        bestEdge = edge;
         best = index;
       }
     });
@@ -1328,12 +1160,6 @@ class ContinuousModeState extends State<ContinuousMode>
     return off;
   }
 
-  /// Reads the global page at the viewport center synchronously.
-  int _currentCenterGp() {
-    if (_placeholderPageHeight <= 0) return 1;
-    return _currentPageFromViewport();
-  }
-
   /// Called by the reader after a chapter switch's images are ready.
   /// Resets the spliced list synchronously (no null window) and scrolls to
   /// the target page. Legado-style: the view stays alive, only its data reloads.
@@ -1342,13 +1168,8 @@ class ContinuousModeState extends State<ContinuousMode>
     _resetSplicedState();
     _cachedSize = _spliced.length + kCacheGrowthPadding;
     cached = List.filled(_cachedSize, false);
-    _suppressPrepend = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _scrollController.jumpTo(_offsetForGp(reader.page));
-      // 章节切换后延时解除屏蔽，避免 jumpTo 过渡帧连锁触发 prepend
-      Future.delayed(const Duration(milliseconds: kPrependSuppressWindowMs), () {
-        if (mounted) _suppressPrepend = false;
-      });
       _appendNextChapter(); // immediately splice next chapter for seamless reading
     });
   }
@@ -1441,12 +1262,17 @@ class ContinuousModeState extends State<ContinuousMode>
     // 不再依赖 _pageHeights 像素累加反算——彻底消除异步高度变化导致的页码错位。
     int gp = _currentPageFromViewport();
     String flag = '';
-    if (_lastSyncedGp >= 0 && (gp - _lastSyncedGp).abs() > 3 && !_spliced.appendingNext && !_spliced.prependingPrev && !_suppressPrepend) {
+    if (_lastSyncedGp >= 0 && (gp - _lastSyncedGp).abs() > 3 && !_spliced.appendingNext) {
       flag = ' <<< GP JUMP (delta=${gp - _lastSyncedGp}, no splice active)';
     }
     _lastSyncedGp = gp;
     reader.dbg('[DBG] _syncReaderState gp=$gp chapter=${reader.chapter} itemCount=${_spliced.length} items=${_itemContexts.length}$flag');
     _updateReaderStateForSpliced(gp);
+    // Mangayomi 式提前预载：距离末尾 ≤ kPreloadAhead 页就 append 下一章，
+    // 不等滚到底（滚到底才加载 = 用户看时转圈 + 换章瞬间跳页）。
+    if (_spliced.shouldAppendNext(gp)) {
+      _appendNextChapter();
+    }
     _cacheSplicedImages(gp);
   }
 
@@ -1697,21 +1523,9 @@ class ContinuousModeState extends State<ContinuousMode>
         if (notification is ScrollUpdateNotification &&
             (scale - 1).abs() < 0.05) {
           if (!_scrollController.hasClients) return false;
-          if (_scrollController.position.pixels >=
-                  _scrollController.position.maxScrollExtent) {
-            reader.dbg('[DBG] scrollNotify MAX pixels=${_scrollController.position.pixels} max=${_scrollController.position.maxScrollExtent} allNextLoaded=${_spliced.allNextLoaded} appendingNext=${_spliced.appendingNext}');
-            if (!_spliced.allNextLoaded && !_spliced.appendingNext) {
-              _appendNextChapter();
-            }
-          } else if (_scrollController.position.pixels <=
-                  _scrollController.position.minScrollExtent) {
-            reader.dbg('[DBG] scrollNotify MIN pixels=${_scrollController.position.pixels} min=${_scrollController.position.minScrollExtent} allPrevLoaded=${_spliced.allPrevLoaded} prependingPrev=${_spliced.prependingPrev} suppressPrepend=$_suppressPrepend');
-            if (!_spliced.allPrevLoaded && !_spliced.prependingPrev) {
-              _prependPrevChapter();
-            }
-          } else {
-            context.findAncestorStateOfType<_ReaderScaffoldState>()?.setFloatingButton(0);
-          }
+          // 拼接触发统一走 _syncReaderState（distToEnd 提前预载），
+          // 不再在 scrollNotify 判断 MAX/MIN。
+          context.findAncestorStateOfType<_ReaderScaffoldState>()?.setFloatingButton(0);
         }
 
         return true;
