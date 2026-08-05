@@ -1,5 +1,44 @@
 part of 'reader.dart';
 
+/// Public, behavior-preserving view onto [_ReaderState] used by
+/// [ContinuousModeState]. Exposing this interface lets widget tests inject a
+/// lightweight fake reader instead of building the full [Reader] page (which
+/// would pull in platform channels, window_manager, real network, etc.).
+///
+/// All members mirror exactly what [ContinuousModeState] reads/writes on the
+/// real reader. Production behavior is unchanged: [_ReaderState] implements
+/// this interface with its existing fields/methods.
+abstract class ReaderView {
+  /// Chapter ids (mirrors `widget.chapters?.ids`). Null when no chapters.
+  Iterable<String>? get chapterIds;
+
+  ComicType get type;
+
+  String get cid;
+
+  /// Current chapter's image keys. Mutated by the view on chapter switch.
+  List<String>? get images;
+  set images(List<String>? value);
+
+  int get chapter;
+  set chapter(int value);
+
+  int get page;
+
+  void setPage(int page);
+
+  ReaderMode get mode;
+
+  Size get size;
+
+  bool get isLoading;
+
+  int get maxChapter;
+
+  /// Debug log hook (wraps the private `_dbg`).
+  void dbg(String s);
+}
+
 class _ReaderImages extends StatefulWidget {
   const _ReaderImages();
 
@@ -62,7 +101,7 @@ class _ReaderImagesState extends State<_ReaderImages> {
           ),
         );
       } else {
-        return _ContinuousMode(key: Key(reader.mode.key));
+        return ContinuousMode(key: Key(reader.mode.key));
       }
     }
   }
@@ -577,7 +616,7 @@ class _GalleryModeState extends State<_GalleryMode>
 /// Manages the cross-chapter seamless scrolling data model.
 ///
 /// Holds the spliced image list and chapter offset/length metadata.
-/// _ContinuousModeState delegates all data access here, keeping UI logic
+/// ContinuousModeState delegates all data access here, keeping UI logic
 /// separate from chapter splicing logic.
 class SplicedChapters {
   List<String> images = [];
@@ -716,30 +755,60 @@ class SplicedChapters {
   bool containsChapter(int n) => _chapNums.contains(n);
 }
 
-class _ContinuousMode extends StatefulWidget {
-  const _ContinuousMode({super.key});
+class ContinuousMode extends StatefulWidget {
+  const ContinuousMode({
+    super.key,
+    this.readerOverride,
+    this.imageProviderFactory,
+    this.debugLog,
+  });
+
+  /// When non-null, used in place of the ancestor [_ReaderState]. This is the
+  /// test seam: a widget test supplies a lightweight [ReaderView] fake here so
+  /// [ContinuousModeState] never touches the real [Reader] page / platform
+  /// channels. Production passes null (default) and the ancestor is used.
+  final ReaderView? readerOverride;
+
+  /// When non-null, called to build each page's [ImageProvider] instead of
+  /// constructing a [ReaderImageProvider] (which hits the network). Tests pass
+  /// a factory returning an in-memory image so `onImageLoaded` fires without
+  /// real I/O. Production passes null (default).
+  final ImageProvider Function(String key, int index)? imageProviderFactory;
+
+  /// When non-null, receives debug-log lines (e.g. the `GP JUMP` rollback
+  /// detector) instead of routing them through `reader.dbg`. Tests use this to
+  /// assert no rollback occurred. Production passes null (default).
+  final void Function(String)? debugLog;
 
   @override
-  State<_ContinuousMode> createState() => _ContinuousModeState();
+  State<ContinuousMode> createState() => ContinuousModeState();
 }
 
 /// 注册 item 的 BuildContext 到父级，用于 _currentPageFromViewport 遍历可见 item。
 ///
 /// 在 item build 时通过 [onRegister] 注册 context，dispose 时通过 [onUnregister] 注销。
-/// _ContinuousModeState._itemContexts 只保留当前可见（已 build）的 item，
+/// ContinuousModeState._itemContexts 只保留当前可见（已 build）的 item，
 /// _currentPageFromViewport 遍历它找视口中心对应的 item index（=页码）。
+///
+/// 关键：必须带 ValueKey(imageKey) + didUpdateWidget 幂等重注册。
+/// 无 key 时 ListView 元素回收按 runtimeType 匹配，跨 index 复用走 didUpdateWidget
+/// 而非 didChangeDependencies → 不重注册 → _itemContexts 的 key 是旧 index、
+/// context 指向新 index 位置 → _currentPageFromViewport 报错 gp → 跳页/振荡。
 class _ItemContextRegistrar extends StatefulWidget {
   final int index;
+  final String imageKey;
   final void Function(int index, BuildContext context) onRegister;
   final void Function(int index) onUnregister;
   final Widget child;
 
   const _ItemContextRegistrar({
+    required Key key,
     required this.index,
+    required this.imageKey,
     required this.onRegister,
     required this.onUnregister,
     required this.child,
-  });
+  }) : super(key: key);
 
   @override
   State<_ItemContextRegistrar> createState() => _ItemContextRegistrarState();
@@ -752,6 +821,18 @@ class _ItemContextRegistrarState extends State<_ItemContextRegistrar> {
     widget.onRegister(widget.index, context);
   }
 
+  /// 元素复用（同 imageKey、index 变化，如 prepend/unloadExcess 平移）时，
+  /// didChangeDependencies 不会再调——必须在这里注销旧 index、注册新 index，
+  /// 否则 _itemContexts 的 key 是旧 index、context 指向新 index 的位置（腐化）。
+  @override
+  void didUpdateWidget(covariant _ItemContextRegistrar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.index != widget.index) {
+      widget.onUnregister(oldWidget.index);
+      widget.onRegister(widget.index, context);
+    }
+  }
+
   @override
   void dispose() {
     widget.onUnregister(widget.index);
@@ -762,9 +843,9 @@ class _ItemContextRegistrarState extends State<_ItemContextRegistrar> {
   Widget build(BuildContext context) => widget.child;
 }
 
-class _ContinuousModeState extends State<_ContinuousMode>
+class ContinuousModeState extends State<ContinuousMode>
     implements _ImageViewController {
-  late _ReaderState reader;
+  late ReaderView reader;
 
   // 自有 ScrollController：完全掌控滚动位置，避免 ScrollablePositionedList
   // 在 item 重建时把 pixels 归零导致回退（legado 式：自己管滚动）。
@@ -863,7 +944,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
     if (ch < 1 || ch > reader.maxChapter) return;
     if (_spliced.containsChapter(ch)) return;
     if (_prefetchedChapters.containsKey(ch)) return;
-    String eid = reader.widget.chapters?.ids.elementAtOrNull(ch - 1) ?? '';
+    String eid = reader.chapterIds?.elementAtOrNull(ch - 1) ?? '';
     if (eid.isEmpty) return;
     _prefetchedChapters[ch] = const []; // mark in-flight to avoid dup
     reader.type.comicSource!.loadComicPages!(reader.cid, eid).then((res) {
@@ -932,7 +1013,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
   /// is clearly inside the middle of the target chapter, not on its edge.
   void _updateReaderStateForSpliced(int globalPage) {
     var (int chap, int localPage, int chapLen) = _spliced.chapterOfPage(globalPage);
-    reader._dbg('[DBG] _updateReaderStateForSpliced IN gp=$globalPage -> chap=$chap localPage=$localPage chapLen=$chapLen curChapter=${reader.chapter} suppress=$_suppressPrepend append=${_spliced.appendingNext} prepend=${_spliced.prependingPrev} loading=${reader.isLoading}');
+    reader.dbg('[DBG] _updateReaderStateForSpliced IN gp=$globalPage -> chap=$chap localPage=$localPage chapLen=$chapLen curChapter=${reader.chapter} suppress=$_suppressPrepend append=${_spliced.appendingNext} prepend=${_spliced.prependingPrev} loading=${reader.isLoading}');
     // 拼接过渡/跳转过渡期间不更新 chapter（避免过渡帧反算错误导致回跳），
     // 只更新 page。legado 式：章节由显式切章持有，不靠 listener 反算。
     // !reader.isLoading：changeChapter 异步加载窗口期内（spliced 仍是旧章拼接、
@@ -947,41 +1028,42 @@ class _ContinuousModeState extends State<_ContinuousMode>
       // 避免边界页归属抖动导致章节号反复回跳（legado 用连续 pageOffset 无此问题）。
       bool onBoundary = localPage <= 0 || localPage >= chapLen - 1;
       if (!onBoundary) {
-        reader._dbg('[DBG] _updateReaderStateForSpliced chapter changed: ${reader.chapter} -> $chap, reader.images reassigned to ch$chap images');
+        reader.dbg('[DBG] _updateReaderStateForSpliced chapter changed: ${reader.chapter} -> $chap, reader.images reassigned to ch$chap images');
         reader.chapter = chap;
         reader.images = _spliced.imagesForChapter(chap);
       }
     }
     // 窗口期（isLoading）内也不更新 page，保持 changeChapter 设置的 page=1，
     // 避免加载完成后 onChapterLoaded 的 jumpTo(_offsetForGp(reader.page)) 跳到错误页。
+    // localPage clamp 到 [1, chapLen] 防越界（如 16/15）：
+    // chapter 切换（不受动画守卫保护）生效而 setPage 被动画守卫丢弃时，
+    // 旧章的大 page 可能残留到新章，clamp 兜底。
     if (!reader.isLoading && reader.page != localPage) {
-      reader.setPage(localPage);
-      context.readerScaffold.update();
+      reader.setPage(localPage.clamp(1, chapLen));
+      context.findAncestorStateOfType<_ReaderScaffoldState>()?.update();
     }
   }
 
   String _eidForPage(int globalPage) {
     int chapNum = _spliced.chapterOfPage(globalPage).$1;
-    return reader.widget.chapters?.ids
-            .elementAtOrNull(chapNum - 1) ??
-        '0';
+    return reader.chapterIds?.elementAtOrNull(chapNum - 1) ?? '0';
   }
 
   Future<void> _appendNextChapter() async {
-    reader._dbg('[DBG] _appendNextChapter ENTER appendingNext=${_spliced.appendingNext} allNextLoaded=${_spliced.allNextLoaded} mounted=$mounted lastCh=${_spliced.lastChapterNum}');
+    reader.dbg('[DBG] _appendNextChapter ENTER appendingNext=${_spliced.appendingNext} allNextLoaded=${_spliced.allNextLoaded} mounted=$mounted lastCh=${_spliced.lastChapterNum}');
     if (_spliced.appendingNext || _spliced.allNextLoaded || !mounted) return;
     if (_spliced.lastChapterNum >= reader.maxChapter) {
       _spliced.markAllNextLoaded();
-      reader._dbg('[DBG] _appendNextChapter lastChapter>=maxChapter, markAllNextLoaded');
+      reader.dbg('[DBG] _appendNextChapter lastChapter>=maxChapter, markAllNextLoaded');
       return;
     }
     _spliced.markAppending(true);
     int nextCh = _spliced.lastChapterNum + 1;
-    String eid = reader.widget.chapters?.ids.elementAtOrNull(nextCh - 1) ?? '';
+    String eid = reader.chapterIds?.elementAtOrNull(nextCh - 1) ?? '';
     if (eid.isEmpty) {
       _spliced.markAppending(false);
       _spliced.markAllNextLoaded();
-      reader._dbg('[DBG] _appendNextChapter eid empty');
+      reader.dbg('[DBG] _appendNextChapter eid empty');
       return;
     }
     // Legado-style: use prefetched page list if available (instant append),
@@ -989,24 +1071,24 @@ class _ContinuousModeState extends State<_ContinuousMode>
     List<String> pages;
     if (_prefetchedChapters.containsKey(nextCh) && _prefetchedChapters[nextCh]!.isNotEmpty) {
       pages = _prefetchedChapters[nextCh]!;
-      reader._dbg('[DBG] _appendNextChapter using prefetched ch$nextCh (${pages.length} pages)');
+      reader.dbg('[DBG] _appendNextChapter using prefetched ch$nextCh (${pages.length} pages)');
     } else {
       var res = await reader.type.comicSource!.loadComicPages!(reader.cid, eid);
       if (!mounted) return;
       if (res.error) {
         _spliced.markAppending(false);
-        reader._dbg('[DBG] _appendNextChapter loadComicPages ERROR ${res.errorMessage}');
+        reader.dbg('[DBG] _appendNextChapter loadComicPages ERROR ${res.errorMessage}');
         return;
       }
       pages = res.data;
     }
     setState(() {
-      reader._dbg('[DBG] _appendNextChapter BEFORE setState itemCount=${_spliced.length}');
+      reader.dbg('[DBG] _appendNextChapter BEFORE setState itemCount=${_spliced.length}');
       _spliced.append(pages, nextCh);
       _spliced.markAppending(false);
-      reader._dbg('[DBG] _appendNextChapter AFTER splice itemCount=${_spliced.length} offsets=${_spliced._offsets}');
+      reader.dbg('[DBG] _appendNextChapter AFTER splice itemCount=${_spliced.length} offsets=${_spliced._offsets}');
     });
-    reader._dbg('[DBG] _appendNextChapter DONE appendedCh=$nextCh splicedLen=${_spliced.length}');
+    reader.dbg('[DBG] _appendNextChapter DONE appendedCh=$nextCh splicedLen=${_spliced.length}');
     _prefetchNeighbors(); // legado: keep next chapter ready for seamless switch
     _growCache(_spliced.length + kCacheGrowthPadding);
     var removed = _spliced.unloadExcess();
@@ -1030,20 +1112,20 @@ class _ContinuousModeState extends State<_ContinuousMode>
   Future<void> _prependPrevChapter() async {
     // 读触发时的视口中心 gp（入口同步读，await 期间用户可能滚动，不能用之后的 gp）
     int oldGp = _currentCenterGp();
-    reader._dbg('[DBG] _prependPrevChapter ENTER prependingPrev=${_spliced.prependingPrev} allPrevLoaded=${_spliced.allPrevLoaded} mounted=$mounted firstCh=${_spliced.firstChapterNum} oldGp=$oldGp');
+    reader.dbg('[DBG] _prependPrevChapter ENTER prependingPrev=${_spliced.prependingPrev} allPrevLoaded=${_spliced.allPrevLoaded} mounted=$mounted firstCh=${_spliced.firstChapterNum} oldGp=$oldGp');
     if (_spliced.prependingPrev || _spliced.allPrevLoaded || !mounted) return;
     if (_spliced.firstChapterNum <= 1) {
       _spliced.markAllPrevLoaded();
-      reader._dbg('[DBG] _prependPrevChapter firstCh<=1, markAllPrevLoaded');
+      reader.dbg('[DBG] _prependPrevChapter firstCh<=1, markAllPrevLoaded');
       return;
     }
     _spliced.markPrepending(true);
     int prevCh = _spliced.firstChapterNum - 1;
-    String eid = reader.widget.chapters?.ids.elementAtOrNull(prevCh - 1) ?? '';
+    String eid = reader.chapterIds?.elementAtOrNull(prevCh - 1) ?? '';
     if (eid.isEmpty) {
       _spliced.markPrepending(false);
       _spliced.markAllPrevLoaded();
-      reader._dbg('[DBG] _prependPrevChapter eid empty');
+      reader.dbg('[DBG] _prependPrevChapter eid empty');
       return;
     }
     // Legado-style: use prefetched page list if available (instant prepend),
@@ -1051,13 +1133,13 @@ class _ContinuousModeState extends State<_ContinuousMode>
     List<String> pages;
     if (_prefetchedChapters.containsKey(prevCh) && _prefetchedChapters[prevCh]!.isNotEmpty) {
       pages = _prefetchedChapters[prevCh]!;
-      reader._dbg('[DBG] _prependPrevChapter using prefetched ch$prevCh (${pages.length} pages)');
+      reader.dbg('[DBG] _prependPrevChapter using prefetched ch$prevCh (${pages.length} pages)');
     } else {
       var res = await reader.type.comicSource!.loadComicPages!(reader.cid, eid);
       if (!mounted) return;
       if (res.error) {
         _spliced.markPrepending(false);
-        reader._dbg('[DBG] _prependPrevChapter loadComicPages ERROR ${res.errorMessage}');
+        reader.dbg('[DBG] _prependPrevChapter loadComicPages ERROR ${res.errorMessage}');
         return;
       }
       pages = res.data;
@@ -1082,11 +1164,11 @@ class _ContinuousModeState extends State<_ContinuousMode>
     // 防止 jumpTo 过渡帧（ScrollablePositionedList 当帧报旧 gp）连锁触发。
     _suppressPrepend = true;
     _prefetchNeighbors(); // legado: keep prev chapter ready for seamless switch
-    reader._dbg('[DBG] _prependPrevChapter DONE prependedCh=$prevCh plen=$plen splicedLen=${_spliced.length} oldGp=$oldGp');
+    reader.dbg('[DBG] _prependPrevChapter DONE prependedCh=$prevCh plen=$plen splicedLen=${_spliced.length} oldGp=$oldGp');
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         int target = oldGp + plen;
-        reader._dbg('[DBG] _prependPrevChapter postFrame jumpTo index=$target (oldGp=$oldGp plen=$plen)');
+        reader.dbg('[DBG] _prependPrevChapter postFrame jumpTo index=$target (oldGp=$oldGp plen=$plen)');
         _scrollController.jumpTo(_offsetForGp(target));
         // jumpTo 过渡帧（约 2-3 帧）后解除屏蔽，期间不会连锁触发
         Future.delayed(const Duration(milliseconds: kPrependSuppressWindowMs), () {
@@ -1122,8 +1204,14 @@ class _ContinuousModeState extends State<_ContinuousMode>
 
   @override
   void initState() {
-    reader = context.reader;
-    reader._imageViewController = this;
+    reader = widget.readerOverride ?? context.reader;
+    // Register this state as the reader's image-view controller. Only do this
+    // on the real (ancestor) reader: in test mode [readerOverride] is a fake
+    // [ReaderView] that cannot accept this private assignment, and the test
+    // drives the view directly so registration is unnecessary.
+    if (widget.readerOverride == null) {
+      (reader as _ReaderState)._imageViewController = this;
+    }
     _scrollController.addListener(_syncReaderState);
     // Only reset now if images are already available (e.g. preloaded before
     // entering the reader). Otherwise onChapterLoaded() will reset after the
@@ -1173,10 +1261,21 @@ class _ContinuousModeState extends State<_ContinuousMode>
     }
     int best = reader.page;
     double bestDist = double.infinity;
+    // 视口在屏幕中的矩形（用于过滤 ListView cacheExtent 预构建的视口外缓存区 item，
+    // 这些 item 的 context 也注册在 _itemContexts，但不参与页码竞争，否则报错 gp）
+    Rect? viewportRect;
+    if (viewport is RenderBox && viewport.attached) {
+      viewportRect = viewport.localToGlobal(Offset.zero) & viewport.size;
+    }
     _itemContexts.forEach((index, ctx) {
       if (!ctx.mounted) return;
       final ro = ctx.findRenderObject();
       if (ro is! RenderBox || !ro.attached) return;
+      // 只考虑与视口有交集的 item；视口外缓存区 item 直接跳过
+      if (viewportRect != null) {
+        final itemRect = ro.localToGlobal(Offset.zero) & ro.size;
+        if (!itemRect.overlaps(viewportRect)) return;
+      }
       final double itemCenter = horizontal
           ? ro.localToGlobal(Offset(ro.size.width / 2, 0)).dx
           : ro.localToGlobal(Offset(0, ro.size.height / 2)).dy;
@@ -1188,6 +1287,17 @@ class _ContinuousModeState extends State<_ContinuousMode>
     });
     return best.clamp(1, _spliced.length);
   }
+
+  /// Test-only: current scroll offset (pixels). Null when the controller has
+  /// no clients (not yet attached).
+  @visibleForTesting
+  double? get testScrollOffset =>
+      _scrollController.hasClients ? _scrollController.offset : null;
+
+  /// Test-only: the page at the viewport center, computed from real RenderBox
+  /// positions (same value `_syncReaderState` feeds into the reader state).
+  @visibleForTesting
+  int get testCurrentPage => _currentPageFromViewport();
 
   /// 第 gp 页（1-based）的显示高度：从 _pageHeights 拿真实高，未加载回退占位。
   double _pageHeight(int gp) {
@@ -1264,14 +1374,15 @@ class _ContinuousModeState extends State<_ContinuousMode>
         String imageKey = _spliced[imageIndex];
         String eid = _eidForPage(index);
 
-        ImageProvider image = ReaderImageProvider(
-          imageKey,
-          reader.type.comicSource?.key,
-          reader.cid,
-          eid,
-          index,
-          enableResize: true,
-        );
+        ImageProvider image = widget.imageProviderFactory?.call(imageKey, index) ??
+            ReaderImageProvider(
+              imageKey,
+              reader.type.comicSource?.key,
+              reader.cid,
+              eid,
+              index,
+              enableResize: true,
+            );
 
         double? width, height;
         if (reader.mode == ReaderMode.continuousLeftToRight ||
@@ -1285,7 +1396,9 @@ class _ContinuousModeState extends State<_ContinuousMode>
             ? reader.size.height
             : reader.size.width;
         return _ItemContextRegistrar(
+          key: ValueKey('registrar_$imageKey'),
           index: index,
+          imageKey: imageKey,
           onRegister: (idx, ctx) => _itemContexts[idx] = ctx,
           onUnregister: (idx) => _itemContexts.remove(idx),
           child: ColoredBox(
@@ -1300,7 +1413,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
               fit: BoxFit.contain,
               placeholderHeight: itemPlaceholder,
               onInit: (state) {
-                reader._dbg('[DBG] ComicImage onInit idx=$index key=$imageKey');
+                reader.dbg('[DBG] ComicImage onInit idx=$index key=$imageKey');
                 imageStates.add(state);
               },
               onImageLoaded: (imgW, imgH) {
@@ -1314,7 +1427,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
                 }
               },
               onDispose: (state) {
-                reader._dbg('[DBG] ComicImage onDispose idx=$index key=$imageKey');
+                reader.dbg('[DBG] ComicImage onDispose idx=$index key=$imageKey');
                 imageStates.remove(state);
               },
             ),
@@ -1332,12 +1445,15 @@ class _ContinuousModeState extends State<_ContinuousMode>
       flag = ' <<< GP JUMP (delta=${gp - _lastSyncedGp}, no splice active)';
     }
     _lastSyncedGp = gp;
-    reader._dbg('[DBG] _syncReaderState gp=$gp chapter=${reader.chapter} itemCount=${_spliced.length} items=${_itemContexts.length}$flag');
+    reader.dbg('[DBG] _syncReaderState gp=$gp chapter=${reader.chapter} itemCount=${_spliced.length} items=${_itemContexts.length}$flag');
     _updateReaderStateForSpliced(gp);
     _cacheSplicedImages(gp);
   }
 
   void _cacheSplicedImages(int cp) {
+    // Test seam: when a fake image provider is injected, skip the network
+    // precache path (ImageDownloader.loadComicImage) entirely.
+    if (widget.imageProviderFactory != null) return;
     // Detect scroll direction
     if (_lastGpForDirection != null) {
       if (cp > _lastGpForDirection!) {
@@ -1452,7 +1568,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
     var pixels = _scrollController.position.pixels;
     var min = _scrollController.position.minScrollExtent;
     var max = _scrollController.position.maxScrollExtent;
-    reader._dbg('[DBG] onScroll pixels=$pixels min=$min max=$max itemCount=${_spliced.length}');
+    reader.dbg('[DBG] onScroll pixels=$pixels min=$min max=$max itemCount=${_spliced.length}');
   }
 
   bool onScaleUpdate([double? scale]) {
@@ -1467,7 +1583,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
 
   @override
   Widget build(BuildContext context) {
-    reader._dbg('[DBG] BUILD called spliceLen=${_spliced.length} readerPage=${reader.page} readerChapter=${reader.chapter}');
+    reader.dbg('[DBG] BUILD called spliceLen=${_spliced.length} readerPage=${reader.page} readerChapter=${reader.chapter}');
     // legado 式：每页初始高度 = 视口高（对应 MATCH_PARENT），
     // 图片加载后缩小到图片真实高，内容上移 → 无间隙。
     _placeholderPageHeight = reader.mode == ReaderMode.continuousTopToBottom
@@ -1504,7 +1620,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
 
     widget = Listener(
       onPointerDown: (event) {
-        reader._dbg('[DBG] onPointerDown fingers=$fingers');
+        reader.dbg('[DBG] onPointerDown fingers=$fingers');
         fingers++;
         if (fingers > 1 && !disableScroll) {
           setState(() {
@@ -1520,7 +1636,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
       },
       onPointerUp: (event) {
         fingers--;
-        reader._dbg('[DBG] onPointerUp fingers=$fingers');
+        reader.dbg('[DBG] onPointerUp fingers=$fingers');
         if (fingers <= 1 && disableScroll) {
           setState(() {
             disableScroll = false;
@@ -1583,18 +1699,18 @@ class _ContinuousModeState extends State<_ContinuousMode>
           if (!_scrollController.hasClients) return false;
           if (_scrollController.position.pixels >=
                   _scrollController.position.maxScrollExtent) {
-            reader._dbg('[DBG] scrollNotify MAX pixels=${_scrollController.position.pixels} max=${_scrollController.position.maxScrollExtent} allNextLoaded=${_spliced.allNextLoaded} appendingNext=${_spliced.appendingNext}');
+            reader.dbg('[DBG] scrollNotify MAX pixels=${_scrollController.position.pixels} max=${_scrollController.position.maxScrollExtent} allNextLoaded=${_spliced.allNextLoaded} appendingNext=${_spliced.appendingNext}');
             if (!_spliced.allNextLoaded && !_spliced.appendingNext) {
               _appendNextChapter();
             }
           } else if (_scrollController.position.pixels <=
                   _scrollController.position.minScrollExtent) {
-            reader._dbg('[DBG] scrollNotify MIN pixels=${_scrollController.position.pixels} min=${_scrollController.position.minScrollExtent} allPrevLoaded=${_spliced.allPrevLoaded} prependingPrev=${_spliced.prependingPrev} suppressPrepend=$_suppressPrepend');
+            reader.dbg('[DBG] scrollNotify MIN pixels=${_scrollController.position.pixels} min=${_scrollController.position.minScrollExtent} allPrevLoaded=${_spliced.allPrevLoaded} prependingPrev=${_spliced.prependingPrev} suppressPrepend=$_suppressPrepend');
             if (!_spliced.allPrevLoaded && !_spliced.prependingPrev) {
               _prependPrevChapter();
             }
           } else {
-            context.readerScaffold.setFloatingButton(0);
+            context.findAncestorStateOfType<_ReaderScaffoldState>()?.setFloatingButton(0);
           }
         }
 
@@ -1642,7 +1758,7 @@ class _ContinuousModeState extends State<_ContinuousMode>
   @override
   void handleDoubleTap(Offset location) {
     if (appdata.settings['quickCollectImage'] == 'DoubleTap') {
-      context.readerScaffold.addImageFavorite();
+      context.findAncestorStateOfType<_ReaderScaffoldState>()?.addImageFavorite();
       return;
     }
     double target;
