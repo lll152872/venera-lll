@@ -126,3 +126,52 @@ git push origin vX.Y.Z
 
 # 3. CI 自动重建 Release（等 15-20 分钟）
 ```
+
+## 6. 重命名已发布 Release 的 tag（零传输，保留 APK）
+
+场景：把旧 tag（如 `v2.4`）改名成 `v2.4.0`，且必须保留已发布的 APK 附件。
+
+**不要下载 APK 再重传。** 本机 GitHub 下行约 30KB/s，46MB 要 20+ 分钟，超过前台命令上限会被杀进程；`ghproxy.net` / `gh-proxy.com` 镜像也不可用。
+
+正确做法是 `PATCH /releases/{id}` 直接改 `tag_name`——release 对象 id 不变，APK 附件原地保留，`browser_download_url` 自动跟着换到新 tag，**全程 0 字节传输**。
+
+```bash
+R=lll152872/venera-lll   # 注意仓库真实名是 venera-lll
+
+# 0. 先禁用 CI（[skip ci] 对重打 tag 无效：workflow 看的是 tag 指向的历史
+#    commit message，改不了。不禁用会触发构建并自动建 release 打架）
+gh workflow disable "Build Android APK"
+gh workflow disable "analyze"
+
+# 1. 先建新 tag 指向【原 commit】——不能跳过这步！
+#    release 的 target_commitish 是 master，若新 tag 不存在，
+#    GitHub 会拿 master 最新 commit 建 tag，历史版本就指错代码了。
+SHA=$(git rev-parse 'v2.4^{commit}')
+TS=$(gh api repos/$R/git/tags -f tag=v2.4.0 -f message="Venera v2.4.0" \
+       -f object=$SHA -f type=commit --jq '.sha')
+gh api repos/$R/git/refs -f ref=refs/tags/v2.4.0 -f sha=$TS
+
+# 2. PATCH release 平移
+ID=$(gh api repos/$R/releases/tags/v2.4 --jq '.id')
+gh api -X PATCH repos/$R/releases/$ID -f tag_name=v2.4.0 -f name="Venera v2.4.0"
+
+# 3. 验证下载链接（应 200 且 Content-Length 与原值一致）
+curl -sIL --ssl-no-revoke "https://github.com/$R/releases/download/v2.4.0/app-release.apk" \
+  | grep -iE "^HTTP/|^content-length"
+
+# 4. 删旧 tag（远端 + 本地）
+gh api -X DELETE repos/$R/git/refs/tags/v2.4
+git tag -d v2.4
+GIT_SSL_NO_VERIFY=1 git fetch origin --tags --prune --prune-tags
+
+# 5. 验证新 tag peel 后的 commit 与原 commit 一致
+git rev-parse 'v2.4.0^{commit}'
+
+# 6. 【必须】恢复 CI
+gh workflow enable "Build Android APK"
+gh workflow enable "analyze"
+```
+
+只有 tag 没有 release 的（如原 `v2.2`），跳过第 2、3 步，只做建新 tag + 删旧 tag。
+
+> 所有 `gh` / `git ls-remote` 操作必须在真实文件系统视图下执行（agent 侧加 `dangerouslyDisableSandbox: true`），Bash 沙箱的 git 视图与真实 FS 不一致，会误报 "tag already exists"。
