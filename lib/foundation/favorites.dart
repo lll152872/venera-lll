@@ -1195,7 +1195,7 @@ class LocalFavoritesManager with ChangeNotifier {
         : oldTime != updateTime;
     var sql = """
       update "$folder"
-      set last_update_time = ?, has_new_update = ?, last_check_time = ?
+      set last_update_time = ?, has_new_update = max(ifnull(has_new_update, 0), ?), last_check_time = ?
     """;
     var params = <dynamic>[
       updateTime,

@@ -72,26 +72,26 @@ git commit -m "docs: 只改文档不触发构建 [skip ci]" && git push
 
 **完整发版步骤**：
 
-1. 改版本号（两处，见 `VERSION_RULES.md`）：
-   - `pubspec.yaml` 的 `version:` → `x.y.0+build`
-   - `lib/foundation/app.dart` 的 `final version` → `"x.y.0"`
+1. 改版本号（两处，见 `VERSION_RULES.md`，自 v2.4.1 起统一三位）：
+   - `pubspec.yaml` 的 `version:` → `x.y.z+build`
+   - `lib/foundation/app.dart` 的 `final version` → `"x.y.z"`
 2. 提交并推送：
    ```bash
    git add pubspec.yaml lib/foundation/app.dart
-   git commit -m "chore: 版本号升至 vX.Y"
+   git commit -m "chore: 版本号升至 vX.Y.Z"
    git push origin master
    ```
 3. 打 tag 并推送：
    ```bash
-   git tag -a vX.Y -m "Venera vX.Y"
-   git push origin vX.Y
+   git tag -a vX.Y.Z -m "Venera vX.Y.Z"
+   git push origin vX.Y.Z
    ```
 4. CI 自动构建 + 自动建 Release（约 15-20 分钟），不需要手动操作。
-5. 验证：`gh release view vX.Y` 应列出 APK 附件。
+5. 验证：`gh release view vX.Y.Z` 应列出 APK 附件。
 
 ### 3.4 用现有 APK 直接挂 Release（不改 pubspec）
 
-若用户说「下载当前 APK 作为 vX.Y 发布」且未提改 pubspec：直接用现有 APK 挂 release tag。
+若用户说「下载当前 APK 作为 vX.Y.Z 发布」且未提改 pubspec：直接用现有 APK 挂 release tag。
 
 代价是 APK 内部 pubspec version 滞后于 tag。下次正式发版前务必补升版本号再 push 构建。
 
@@ -116,13 +116,13 @@ gh run download <run_id> -D /path/to/output
 
 ```bash
 # 1. 删除旧 release
-gh release delete vX.Y --yes
+gh release delete vX.Y.Z --yes
 
 # 2. 删除旧 tag 并重建
-git tag -d vX.Y
-git tag -a vX.Y -m "Venera vX.Y"
-git push origin :refs/tags/vX.Y
-git push origin vX.Y
+git tag -d vX.Y.Z
+git tag -a vX.Y.Z -m "Venera vX.Y.Z"
+git push origin :refs/tags/vX.Y.Z
+git push origin vX.Y.Z
 
 # 3. CI 自动重建 Release（等 15-20 分钟）
 ```
