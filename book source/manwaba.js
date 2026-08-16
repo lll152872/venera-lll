@@ -2,11 +2,11 @@
 class ManWaBa extends ComicSource {
   name = '漫蛙吧';
   key = 'manwaba';
-  version = '1.1.0';
+  version = '1.2.0';
   minAppVersion = '1.4.0';
   url = 'https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/assets/sources/manwaba.js';
-  // 修复①：原 mwuu.cc 已失效，实际可用域名为 manwapi.cc
-  api = 'https://manwapi.cc/api';
+  // 修复①：原 mwuu.cc 已失效，实际可用域名为 manwapi.cc；2026-08 起 manwapi.cc 301 到 manwali.cc
+  api = 'https://manwali.cc/api';
   // 图片 AES-CBC 解密密钥（从 manwaba.com base.js 提取）
   AES_KEY = '0B6666A0-BB59-1381-B746-a0E4C9AC';
 
@@ -140,6 +140,55 @@ class ManWaBa extends ComicSource {
     },
   };
 
+  // 修复④（核心）：manwaba 图片 CDN 返回的是 AES-CBC 加密数据，不是标准图片。
+  // 从 base.js 提取的解密逻辑：前16字节=IV，其余=密文，AES-256-CBC 解密后得到 WebP。
+  // onImageLoad 返回 onResponse 回调，Venera 下载图片后会调用它，用解密后的数据替换原始数据。
+  // 修复⑤：封面/缩略图同样走 AES 加密（2026-08 CDN 全面加密 en_images 路径），
+  // 必须实现 onThumbnailLoad，否则封面显示为密文乱码/黑图。
+  _imageLoadConfig(imageKey) {
+    if (!imageKey || !imageKey.includes('en_images')) {
+      return {};
+    }
+    return {
+      headers: {
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'referer': 'https://manwaba.com/',
+      },
+      onResponse: (buffer) => {
+        // buffer 是下载的原始字节数组 (ArrayBuffer/Uint8Array)
+        let view = new Uint8Array(buffer);
+        // 检查是否已经是标准图片（不需要解密）
+        if ((view[0] === 0xFF && view[1] === 0xD8) ||  // JPEG
+            (view[0] === 0x89 && view[1] === 0x50) ||  // PNG
+            (view[0] === 0x47 && view[1] === 0x49) ||  // GIF
+            (view[0] === 0x52 && view[1] === 0x49)) {  // RIFF (WebP)
+          return buffer;
+        }
+        // AES-CBC 解密：前16字节=IV，其余=密文
+        // 注意：必须用 ArrayBuffer/Uint8Array 传参，flutter_js 才能把它们识别为 Uint8List
+        // 普通数组 [] 会被识别为 List<dynamic>，导致 Dart 端 AES 报类型错误
+        let iv = new Uint8Array(16);
+        for (let i = 0; i < 16; i++) iv[i] = view[i];
+        let ciphertext = new Uint8Array(view.length - 16);
+        for (let i = 0; i < ciphertext.length; i++) ciphertext[i] = view[16 + i];
+        let keyBytes = new Uint8Array(32);
+        let rawKey = this.AES_KEY;
+        for (let i = 0; i < 32 && i < rawKey.length; i++) {
+          keyBytes[i] = rawKey.charCodeAt(i);
+        }
+        let decrypted = sendMessage({
+          method: "convert",
+          type: "aes-cbc",
+          value: ciphertext.buffer,
+          key: keyBytes.buffer,
+          iv: iv.buffer,
+          isEncode: false
+        });
+        return decrypted;
+      },
+    };
+  }
+
   comic = {
     // 修复②：章节 API 分页参数 pageSize(驼峰)，单页有上限，按页循环拉全
     loadInfo: async (id) => {
@@ -188,48 +237,12 @@ class ManWaBa extends ComicSource {
     // 从 base.js 提取的解密逻辑：前16字节=IV，其余=密文，AES-256-CBC 解密后得到 WebP。
     // onImageLoad 返回 onResponse 回调，Venera 下载图片后会调用它，用解密后的数据替换原始数据。
     onImageLoad: (imageKey, comicId, ep) => {
-      // 只对漫画内容图片（en_images 路径）做解密，封面/缩略图不需要
-      if (!imageKey || !imageKey.includes('en_images')) {
-        return {};
-      }
-      return {
-        headers: {
-          'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'referer': 'https://manwaba.com/',
-        },
-        onResponse: (buffer) => {
-          // buffer 是下载的原始字节数组 (ArrayBuffer/Uint8Array)
-          let view = new Uint8Array(buffer);
-          // 检查是否已经是标准图片（不需要解密）
-          if ((view[0] === 0xFF && view[1] === 0xD8) ||  // JPEG
-              (view[0] === 0x89 && view[1] === 0x50) ||  // PNG
-              (view[0] === 0x47 && view[1] === 0x49) ||  // GIF
-              (view[0] === 0x52 && view[1] === 0x49)) {  // RIFF (WebP)
-            return buffer;
-          }
-          // AES-CBC 解密：前16字节=IV，其余=密文
-          // 注意：必须用 ArrayBuffer/Uint8Array 传参，flutter_js 才能把它们识别为 Uint8List
-          // 普通数组 [] 会被识别为 List<dynamic>，导致 Dart 端 AES 报类型错误
-          let iv = new Uint8Array(16);
-          for (let i = 0; i < 16; i++) iv[i] = view[i];
-          let ciphertext = new Uint8Array(view.length - 16);
-          for (let i = 0; i < ciphertext.length; i++) ciphertext[i] = view[16 + i];
-          let keyBytes = new Uint8Array(32);
-          let rawKey = this.AES_KEY;
-          for (let i = 0; i < 32 && i < rawKey.length; i++) {
-            keyBytes[i] = rawKey.charCodeAt(i);
-          }
-          let decrypted = sendMessage({
-            method: "convert",
-            type: "aes-cbc",
-            value: ciphertext.buffer,
-            key: keyBytes.buffer,
-            iv: iv.buffer,
-            isEncode: false
-          });
-          return decrypted;
-        },
-      };
+      return this._imageLoadConfig(imageKey);
+    },
+    // 修复⑤（封面 bug）：封面/缩略图同样被 AES 加密，必须走 onThumbnailLoad 解密，
+    // 否则封面下载下来是密文，Venera 直接当图片显示 → 封面黑图/乱码。
+    onThumbnailLoad: (imageKey) => {
+      return this._imageLoadConfig(imageKey);
     },
   };
 }

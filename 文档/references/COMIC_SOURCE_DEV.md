@@ -129,6 +129,8 @@ return new Uint8Array(decrypted).buffer;
 
 - 解密密钥通常从网站 `base.js` 提取（搜 `getSecureImageUrl` / `AES` / `decrypt`）
 - 注意：`isEncode: false` 表示**解密**（不是加密）
+- **封面也要解密（2026-08 manwaba 实测）**：站点把 `en_images` 路径下所有图（含 `cover/` 封面）都 AES 加密后，若书源只写了 `onImageLoad` 没写 `onThumbnailLoad`，封面会显示为密文乱码/黑图。因为 Venera 封面走 `CachedImage → ImageDownloader.loadThumbnail → getThumbnailLoadingConfig`（对应 JS `onThumbnailLoad`），与阅读页 `onImageLoad` 是**两条独立通道**。修法：解密逻辑抽成公共方法（如 `_imageLoadConfig`），`onImageLoad` 与 `onThumbnailLoad` 共用。
+- **API 域名 301 跳转**（2026-08 manwaba 实测）：`manwapi.cc` 已 301 到 `manwali.cc`。Venera 的 `RHttpAdapter` 有 `RedirectSettings.limited(5)` 会自动跟随，但建议直接改成新域名，省一跳。
 
 ## 11. 虫虫漫画 (warchina / warchina.com) 源要点
 
