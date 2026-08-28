@@ -7,7 +7,7 @@ class JM extends ComicSource {
     // unique id of the source
     key = "jm"
 
-    version = "1.4.0"
+    version = "1.4.1"
 
     minAppVersion = "1.5.0"
 
@@ -15,8 +15,8 @@ class JM extends ComicSource {
 
     static jmPkgName = "com.example.app"
 
-    // update url
-    url = "https://cdn.jsdelivr.net/gh/venera-app/venera-configs@main/jm.js"
+    // update url（jsdelivr 从本仓库 assets/sources/jm.js 取，用于检查更新）
+    url = "https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/assets/sources/jm.js"
 
     dailyCheckInInProgress = false
 
@@ -657,6 +657,37 @@ class JM extends ComicSource {
             }
         },
 
+        /**
+         * [Optional] 精确标签搜索接口（配合 App 搜索层 `tag:` 语法）。
+         * App 检测到搜索词含 `tag:xxx` 且书源实现了本方法时走此实现层（JM main_tag=3 官方标签通道）；
+         * 未实现的书源自动退回「全文搜索 + App 客户端 tag 过滤」。
+         * @param tag {string} - 标签名（来自 `tag:` 语法或详情页 tag 点击）
+         * @param keyword {string} - 剩余普通关键词（已剥离特殊语法，可为空串）
+         * @param options {string[]} - options from optionList
+         * @param page {number}
+         * @returns {Promise<{comics: Comic[], maxPage: number}>}
+         */
+        tagSearch: async (tag, keyword, options, page) => {
+            // main_tag=3 = 标签精确搜索；keyword 非空时以「+关键词」追加（JM 语法：必须包含）
+            let rest = keyword.trim()
+            let query = rest.length > 0 ? `${tag} +${rest}` : tag
+            query = encodeURIComponent(query)
+            query = query.replace(/%20/g, '+')
+            let url = `${this.baseUrl}/search?search_query=${query}&main_tag=3&o=mr`
+            if(page > 1) {
+                url += `&page=${page}`
+            }
+            let res = await this.get(url)
+            let data = JSON.parse(res)
+            let total = data.total
+            let maxPage = Math.ceil(total / 80)
+            let comics = data.content.map((e) => this.parseComic(e))
+            return {
+                comics: comics,
+                maxPage: maxPage
+            }
+        },
+
         // provide options for search
         optionList: [
             {
@@ -971,12 +1002,14 @@ class JM extends ComicSource {
          * [Optional] Handle tag click event
          * @param namespace {string}
          * @param tag {string}
-         * @returns {{action: string, keyword: string, param: string?}}
+         * @returns {{action: string, keyword: string}}
          */
         onClickTag: (namespace, tag) => {
+            // 统一走 App 搜索层 `tag:` 语法通道：
+            // 书源实现 search.tagSearch → 精确标签搜索；未实现 → 自动退回全文搜索+客户端过滤
             return {
                 action: 'search',
-                keyword: tag,
+                keyword: 'tag:' + tag,
             }
         },
     }
