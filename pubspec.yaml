@@ -58,6 +58,8 @@ dependencies:
     git:
       url: https://github.com/venera-app/lodepng_flutter
       ref: ac7d05dde32e8d728102a9ff66e6b55f05d94ba1
+  # rhttp 0.15.1 的 Rust 侧精确锁定 flutter_rust_bridge =2.11.1（见其 Cargo.toml），
+  # Dart 侧必须与之一致，否则 Rhttp.init() 失败、全部网络请求不可用。
   rhttp: ^0.15.1
   webdav_client:
     git:
@@ -96,6 +98,13 @@ dev_dependencies:
     git:
       url: https://github.com/venera-app/flutter_to_debian.git
   archive: any
+
+# 防止 FRB 版本脱节（历史最高频事故：镜像源重解析依赖时给出不同版本的 FRB，
+# 与 rhttp 0.15.1 Rust 侧 =2.11.1 不匹配 → Rhttp.init() 失败 → 所有网络请求挂）。
+# 钉死后无论走什么源、怎么重新解析，Dart 侧永远是 2.11.1。
+# 升级 rhttp 时必须同步更新此处（对照 rhttp rust/Cargo.toml 的精确锁定值）。
+dependency_overrides:
+  flutter_rust_bridge: 2.11.1
 
 flutter:
   uses-material-design: true
