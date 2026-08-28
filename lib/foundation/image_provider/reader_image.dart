@@ -31,7 +31,9 @@ class ReaderImageProvider
   Future<Uint8List> load(chunkEvents, checkStop) async {
     Uint8List? imageBytes;
     if (imageKey.startsWith('file://')) {
-      var file = File(imageKey);
+      // imageKey 是 'file://<abs path>' URI，Dart 的 File() 不认 URI，
+      // 必须 strip 前缀（对齐 cached_image.dart:47 / images.dart:575 的写法）。
+      var file = File(imageKey.substring(7));
       if (await file.exists()) {
         imageBytes = await file.readAsBytes();
       } else {
