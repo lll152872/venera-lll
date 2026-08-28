@@ -39,11 +39,12 @@
 
 ## 2. 提交规则：什么可以 push，什么不可以
 
-### 2.1 书源 JS 文件不要 push
+### 2.1 书源 JS 文件的提交规则（2026-08-28 更新）
 
-- `book source/*.js`（如 baozi.js / jm.js / new.js）是本地书源，**不要** add/commit/push 进主仓库。
-- 原因：书源是用户本地私有的，不属于公共仓库内容；且 push 会不必要地触发 CI（即使可用 `[skip ci]` 跳过，也不应进仓库）。
-- 处理：保持它们 untracked / 不纳入提交。提交时只 `git add` 真正的源码改动（如 `lib/pages/reader/*.dart`），不要 `git add .`。
+- `book source/*.js`（如 baozi.js / jm.js）**可以** commit/push 进主仓库，但**必须**在 commit message 末尾带 `[skip ci]`，避免无意义触发构建。
+- **commit message 不要出现「书源」相关字样**（如「同步书源」「书源更新」「xx 源 v1.x」）——公开仓库低调处理，不暴露书源更新痕迹。用中性描述，如 `chore: update local files [skip ci]`。
+- 对外分发的书源副本放 `assets/sources/`（jsdelivr 从这里取，用于 App 内检查更新）；`book source/` 是本地工作副本，两处需保持同步。
+- 提交时仍只 `git add` 指定文件，不要 `git add .`。
 
 ### 2.2 pubspec.lock 不要进 commit
 
