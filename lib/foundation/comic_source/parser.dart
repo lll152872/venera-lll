@@ -720,6 +720,29 @@ class ComicSourceParser {
 
     SearchNextFunction? loadNext;
 
+    // 可选：书源实现的精确标签搜索（配合搜索层 `tag:` 语法）
+    TagSearchFunction? tagSearch;
+    if (_checkExists('search.tagSearch')) {
+      tagSearch = (tag, keyword, page, searchOption) async {
+        try {
+          var res = await JsEngine().runCode("""
+          ComicSource.sources.$_key.search.tagSearch(
+            ${jsonEncode(tag)}, ${jsonEncode(keyword)}, ${jsonEncode(searchOption)}, ${jsonEncode(page)})
+        """);
+          return Res(
+            List.generate(
+              res["comics"].length,
+              (index) => Comic.fromJson(res["comics"][index], _key!),
+            ),
+            subData: res["maxPage"],
+          );
+        } catch (e, s) {
+          Log.error("Network", "$e\n$s");
+          return Res.error(e.toString());
+        }
+      };
+    }
+
     if (_checkExists('search.load')) {
       loadPage = (keyword, page, searchOption) async {
         try {
@@ -760,7 +783,7 @@ class ComicSourceParser {
       };
     }
 
-    return SearchPageData(options, loadPage, loadNext);
+    return SearchPageData(options, loadPage, loadNext, tagSearch: tagSearch);
   }
 
   LoadComicFunc? _parseLoadComicFunc() {

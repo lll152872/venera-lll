@@ -19,6 +19,12 @@ class SearchQuery {
   /// The keyword to send to the source (special syntax stripped).
   final String cleanKeyword;
 
+  /// 普通关键词（含引号短语），**永不回退**为原始输入。
+  /// 与 [cleanKeyword] 的区别：当用户只输入过滤器（如 `tag:ntr`）时，
+  /// [cleanKeyword] 会回退为原始文本，而本字段为空串。
+  /// 用途：下推给书源精确标签搜索接口（`search.tagSearch`）的 keyword 参数。
+  final String plainKeyword;
+
   /// Lowercased terms that must NOT appear anywhere in the comic's text.
   final List<String> excludes;
 
@@ -38,8 +44,44 @@ class SearchQuery {
       fieldFilters.isNotEmpty ||
       excludeFieldFilters.isNotEmpty;
 
+  /// 首个 `tag:` 包含过滤器的值（如 `tag:ntr` → `ntr`），无则返回 null。
+  /// 书源实现了精确标签搜索接口（`search.tagSearch`）时，搜索层会把该值
+  /// 下推给书源做原生 tag 搜索；未实现时由 [matches] 在客户端过滤兜底。
+  String? get firstTagFilter {
+    for (final f in fieldFilters) {
+      if (f.key == 'tag') return f.value;
+    }
+    return null;
+  }
+
+  /// 返回移除了首个 `tag:` 包含过滤器的新 [SearchQuery]。
+  ///
+  /// 用途：该标签已下推给书源（`search.tagSearch`）在服务器端过滤后，
+  /// 客户端不应再重复过滤 —— 书源搜索结果的 tags 往往只有分类信息
+  /// （如 JM 的 parseComic 只填 category），不含实际标签，
+  /// 重复过滤会把服务器命中的结果全部滤空。
+  /// 其余过滤器（其它 `tag:`、`author:`、排除词等）保留继续客户端兜底。
+  SearchQuery stripFirstTagFilter() {
+    final removed = [...fieldFilters];
+    for (var i = 0; i < removed.length; i++) {
+      if (removed[i].key == 'tag') {
+        removed.removeAt(i);
+        break;
+      }
+    }
+    return SearchQuery._(
+      cleanKeyword: cleanKeyword,
+      plainKeyword: plainKeyword,
+      excludes: excludes,
+      exactPhrases: exactPhrases,
+      fieldFilters: removed,
+      excludeFieldFilters: excludeFieldFilters,
+    );
+  }
+
   const SearchQuery._({
     required this.cleanKeyword,
+    required this.plainKeyword,
     this.excludes = const [],
     this.exactPhrases = const [],
     this.fieldFilters = const [],
@@ -103,6 +145,9 @@ class SearchQuery {
 
     return SearchQuery._(
       cleanKeyword: clean,
+      // plainKeyword 不做回退：只由普通关键词 token 组成，
+      // 供下推给书源 tagSearch 的 keyword 使用，避免把 `tag:` 等语法字面量传给书源
+      plainKeyword: keywordParts.join(' ').trim(),
       excludes: excludes,
       exactPhrases: exactPhrases,
       fieldFilters: fieldFilters,

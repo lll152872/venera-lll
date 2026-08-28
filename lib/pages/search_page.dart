@@ -42,22 +42,47 @@ class _SearchPageState extends State<SearchPage> {
 
   var options = <String>[];
 
+  /// 标签输入框：与上方关键词框相互独立，都可空，至少填一个即可搜索
+  var tagController = TextEditingController();
+
   void update() {
     setState(() {});
   }
 
+  /// 组合搜索词：关键词与标签输入合并为 `keyword tag:xxx` 语法，
+  /// 由搜索层（SearchQuery）解析后自动下推给实现了 tagSearch 的书源
+  String buildSearchText() {
+    var keyword = controller.text.trim();
+    var tag = tagController.text.trim();
+    if (tag.isEmpty) {
+      return keyword;
+    }
+    var tagToken = "tag:$tag";
+    if (keyword.isEmpty) {
+      return tagToken;
+    }
+    return "$keyword $tagToken";
+  }
+
   void search([String? text]) {
+    // text == null：来自搜索框/标签框回车 → 组合两个输入框；
+    // text != null：来自搜索历史点击 → 直接用历史词（本身可能已含 tag: 语法）
+    var keyword = text ?? buildSearchText();
+    // 关键词与标签都为空时不发起搜索
+    if (keyword.removeAllBlank.isEmpty) {
+      return;
+    }
     if (aggregatedSearch) {
       context
           .to(
-            () => AggregatedSearchPage(keyword: text ?? controller.text)
+            () => AggregatedSearchPage(keyword: keyword)
           )
           .then((_) => update());
     } else {
       context
           .to(
             () => SearchResultPage(
-              text: text ?? controller.text,
+              text: keyword,
               sourceKey: searchTarget,
               options: options,
             )
@@ -157,7 +182,8 @@ class _SearchPageState extends State<SearchPage> {
       searchTarget = defaultSearchTarget;
     }
     controller = SearchBarController(
-      onSearch: search,
+      // 回车时忽略回调参数（= 搜索框文本），走 search() 组合关键词+标签输入
+      onSearch: (text) => search(),
     );
     appdata.settings.addListener(updateSearchSourcesIfNeeded);
     super.initState();
@@ -166,6 +192,7 @@ class _SearchPageState extends State<SearchPage> {
   @override
   void dispose() {
     focusNode.dispose();
+    tagController.dispose();
     appdata.settings.removeListener(updateSearchSourcesIfNeeded);
     super.dispose();
   }
@@ -250,6 +277,7 @@ class _SearchPageState extends State<SearchPage> {
         duration: const Duration(milliseconds: 200),
         child: buildSearchOptions(),
       );
+      yield buildTagInput();
       yield _SearchHistory(search);
     }
   }
@@ -346,6 +374,33 @@ class _SearchPageState extends State<SearchPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: children,
+        ),
+      ),
+    );
+  }
+
+  Widget buildTagInput() {
+    return SliverToBoxAdapter(
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text("Tag".tl),
+            ),
+            TextField(
+              controller: tagController,
+              decoration: InputDecoration(
+                hintText: "Tag (Optional)".tl,
+                isDense: true,
+                border: const OutlineInputBorder(),
+              ),
+              onSubmitted: (_) => search(),
+            ),
+          ],
         ),
       ),
     );

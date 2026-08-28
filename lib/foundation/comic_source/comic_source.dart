@@ -433,6 +433,17 @@ typedef SearchNextFunction =
       List<String> searchOption,
     );
 
+/// 可选的精确标签搜索接口（配合搜索层 `tag:` 语法）。
+/// [tag] 为标签名，[keyword] 为剥离特殊语法后的剩余普通关键词（可为空）。
+/// 书源 JS 侧对应可选实现 `search.tagSearch(tag, keyword, options, page)`。
+typedef TagSearchFunction =
+    Future<Res<List<Comic>>> Function(
+      String tag,
+      String keyword,
+      int page,
+      List<String> searchOption,
+    );
+
 class SearchPageData {
   /// If this is not null, the default value of search options will be first element.
   final List<SearchOptions>? searchOptions;
@@ -441,7 +452,16 @@ class SearchPageData {
 
   final SearchNextFunction? loadNext;
 
-  const SearchPageData(this.searchOptions, this.loadPage, this.loadNext);
+  /// 书源实现的精确标签搜索（可选）。非 null 时，搜索层遇到 `tag:` 语法
+  /// 优先下推给书源精确搜索；null 时退回「全文搜索 + 客户端过滤」。
+  final TagSearchFunction? tagSearch;
+
+  const SearchPageData(
+    this.searchOptions,
+    this.loadPage,
+    this.loadNext, {
+    this.tagSearch,
+  });
 }
 
 class SearchOptions {

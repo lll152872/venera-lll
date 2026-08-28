@@ -4,6 +4,7 @@ import 'package:venera/foundation/app.dart';
 import 'package:venera/foundation/appdata.dart';
 import 'package:venera/foundation/comic_source/comic_source.dart';
 import 'package:venera/foundation/global_state.dart';
+import 'package:venera/foundation/res.dart';
 import 'package:venera/foundation/search_query.dart';
 import 'package:venera/pages/search_page.dart';
 import 'package:venera/utils/ext.dart';
@@ -161,11 +162,20 @@ class _SearchResultPageState extends State<SearchResultPage> {
       loadPage: source!.searchPageData!.loadPage == null
           ? null
           : (i) async {
-              final res = await source.searchPageData!.loadPage!(
-                query.cleanKeyword,
-                i,
-                options,
-              );
+              final data = source.searchPageData!;
+              // 搜索词含 `tag:` 且书源实现了精确标签搜索 → 走书源实现层；
+              // 否则维持「全文搜索 + 客户端过滤」
+              final tag = query.firstTagFilter;
+              Res<List<Comic>> res;
+              if (tag != null && data.tagSearch != null) {
+                res = await data.tagSearch!(
+                    tag, query.plainKeyword, i, options);
+                // 已下推的标签由书源服务器端过滤，客户端剥离该过滤器，
+                // 只用剩余过滤器兜底（避免把服务器命中的结果滤空）
+                return query.stripFirstTagFilter().filterResult(res);
+              }
+              res = await data.loadPage!(query.cleanKeyword, i, options);
+              // filterResult 兜底：tag:/author:/排除等过滤器客户端过滤
               return query.filterResult(res);
             },
       loadNext: source.searchPageData!.loadNext == null

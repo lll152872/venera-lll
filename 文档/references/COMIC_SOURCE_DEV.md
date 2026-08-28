@@ -148,4 +148,44 @@ return new Uint8Array(decrypted).buffer;
   - 字段名偶尔为 `chapter_images`（兜底正则）。图片是标准 WebP，**无需解密**。
 - **图片 CDN 反 referer（坑）**：图片在 `*.g-mh.online`，**带 warchina referer 的请求被拒**（503/超时），无 referer 直连成功。故 `onImageLoad` 只给 UA、**故意不设 referer**。若 App 实测仍 503，是 venera 网络层自动注入了 referer，改 `referer:''` 或换成图片自身 origin 做 referer。
 - **封面**：`_small.jpg` 是真封面（17KB），去掉 `_small` 反而 404，保留 `_small`。
-- **卡片正则**：详情页链接用 `/\/comic\/(\d+)\/?$/`（结尾锚定，自动排除章节 `.html` 链接）。
+
+## 12. 精确标签搜索接口 `search.tagSearch`（2026-08 新增）
+
+App 搜索层（`SearchQuery`）支持 `tag:xxx` / `author:xxx` / `-xxx` / `"短语"` 语法。其中 `tag:` 语法的行为分两条通道：
+
+- **书源实现了 `search.tagSearch`** → 下推给书源走原生标签精确搜索（如 JM 的 `main_tag=3`）
+- **未实现** → 自动退回「全文搜索 + App 客户端 tag 过滤」（原有行为，无需改动）
+
+JS 侧可选实现（签名与 `search.load` 类似，多一个 keyword 参数）：
+
+```js
+search = {
+  load: async (keyword, options, page) => { ... },
+
+  /**
+   * [Optional] 精确标签搜索接口（配合 App 搜索层 `tag:` 语法）
+   * @param tag {string} - 标签名（来自 `tag:` 语法或详情页 tag 点击）
+   * @param keyword {string} - 剩余普通关键词（已剥离全部语法，可为空串）
+   * @param options {string[]} - options from optionList
+   * @param page {number}
+   */
+  tagSearch: async (tag, keyword, options, page) => {
+    // 例：JM main_tag=3；keyword 非空时以「+关键词」追加（JM 语法：必须包含）
+    let rest = keyword.trim()
+    let query = rest.length > 0 ? `${tag} +${rest}` : tag
+    query = encodeURIComponent(query).replace(/%20/g, '+')
+    let url = `${this.baseUrl}/search?search_query=${query}&main_tag=3&o=mr`
+    if (page > 1) url += `&page=${page}`
+    let res = await this.get(url)
+    let data = JSON.parse(res)
+    return { comics: data.content.map(e => this.parseComic(e)), maxPage: Math.ceil(data.total / 80) }
+  },
+}
+```
+
+要点：
+
+- 返回格式与 `search.load` 相同：`{ comics: [...], maxPage: N }`
+- 下推时 App 端 `filterResult` 仍会兜底：多个 `tag:` 过滤器只把**首个**下推书源，其余（及 `author:`、排除词）继续客户端过滤，AND 语义不变
+- `onClickTag` 返回 `keyword: 'tag:' + tag` 即可让详情页 tag 点击复用同一条链路（jm.js 已接）
+- Dart 端对应：`parser.dart` 检测 `search.tagSearch` 构建 `TagSearchFunction`，`SearchPageData.tagSearch` 字段；`SearchQuery.plainKeyword` 专供下推（不带语法字面量，不回退）
