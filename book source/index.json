@@ -40,5 +40,12 @@
     "fileName": "warchina.js",
     "version": "1.0.2",
     "url": "https://ghproxy.net/https://raw.githubusercontent.com/lll152872/venera-lll/master/book%20source/warchina.js"
+  },
+  {
+    "name": "漫画柜",
+    "key": "ManHuaGui",
+    "fileName": "manhuagui.js",
+    "version": "1.2.1",
+    "url": "https://ghproxy.net/https://raw.githubusercontent.com/lll152872/venera-lll/master/book%20source/manhuagui.js"
   }
 ]

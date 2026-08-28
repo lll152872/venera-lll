@@ -189,3 +189,13 @@ search = {
 - 下推时 App 端 `filterResult` 仍会兜底：多个 `tag:` 过滤器只把**首个**下推书源，其余（及 `author:`、排除词）继续客户端过滤，AND 语义不变
 - `onClickTag` 返回 `keyword: 'tag:' + tag` 即可让详情页 tag 点击复用同一条链路（jm.js 已接）
 - Dart 端对应：`parser.dart` 检测 `search.tagSearch` 构建 `TagSearchFunction`，`SearchPageData.tagSearch` 字段；`SearchQuery.plainKeyword` 专供下推（不带语法字面量，不回退）
+
+## 13. 漫画柜 (manhuagui / manhuagui.com) 源要点（2026-08-28 引入）
+
+**直接采用官方源** `venera-app/venera-configs` 的 manhuagui.js v1.2.1（逐字节一致，未改动），作为包子漫画的替代/补充。站点质量高于 baozi（官方在维护、章节全）。
+
+- **接入方式**：官方 CDN（jsdelivr）原样下载 → 放入 `book source/manhuagui.js` → index.json 增加第 7 条（key `ManHuaGui`，version 1.2.1）。
+- **版本约束**：js 内声明 `minAppVersion: 1.4.0`，App 2.0.0 满足。
+- **技术特征**：详情/章节走 `__VIEWSTATE`（LZString 解压后 JSON 解析），图片 CDN 在 `us.hamreus.com`（需要正确 referer，官方源已处理）。若站点结构变更，优先对照官方仓库更新版本，不要本地魔改。
+- **网络注意**：manhuagui.com 直连在部分网络环境超时（被墙/CDN 抖动），App 侧若加载失败先确认站点可达性。
+- **升级跟踪**：官方源更新时同步 `book source/manhuagui.js` + index.json 两处 version 字段。
