@@ -775,8 +775,7 @@ class ContinuousMode extends StatefulWidget {
   /// null (default).
   final Future<List<String>> Function(int chapter)? chapterPagesProvider;
 
-  /// Test seam: when non-null, overrides the ListView's
-  /// [ScrollView.scrollCacheExtent]
+  /// Test seam: when non-null, overrides the ListView's cacheExtent
   /// so tests can force-build every item in one frame. Why: with the default
   /// cacheExtent (250px) only items near the viewport are built, so pages
   /// *above* the viewport never load/resize — the "image shrink" then only
@@ -1730,10 +1729,12 @@ class ContinuousModeState extends State<ContinuousMode>
       itemCount: _spliced.length + 2,
       addSemanticIndexes: false,
       // 测试态覆盖 cacheExtent（全量 build item），生产传 null 走默认
-      // 250px 缓存区，行为不变。新 API 接受 ScrollCacheExtent 包装类型。
-      scrollCacheExtent: cacheExtentOverride == null
-          ? null
-          : ScrollCacheExtent.pixels(cacheExtentOverride),
+      // 250px 缓存区，行为不变。注意必须用旧 API cacheExtent：项目基线
+      // Flutter 3.41.4（pubspec environment）没有 scrollCacheExtent 参数
+      // （3.44 才引入），CI 编译报 No named parameter；3.44 本地的
+      // deprecated 提示用 ignore 压制。
+      // ignore: deprecated_member_use
+      cacheExtent: cacheExtentOverride,
       scrollDirection: reader.mode == ReaderMode.continuousTopToBottom
           ? Axis.vertical
           : Axis.horizontal,
