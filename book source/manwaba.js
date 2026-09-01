@@ -2,13 +2,22 @@
 class ManWaBa extends ComicSource {
   name = '漫蛙吧';
   key = 'manwaba';
-  version = '1.2.0';
+  version = '1.4.0';
   minAppVersion = '1.4.0';
   url = 'https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/assets/sources/manwaba.js';
   // 修复①：原 mwuu.cc 已失效，实际可用域名为 manwapi.cc；2026-08 起 manwapi.cc 301 到 manwali.cc
-  api = 'https://manwali.cc/api';
+  // 修复⑥（2026-09-01 实测）：manwali.cc 已 301 → manwari.cc。
+  //   旧域名每次请求都要多付一次 DNS+TCP+TLS 往返，实测 TTFB 1059ms vs 直连 565ms，慢近一倍。
+  //   本源 loadInfo/loadEp 会串行发多次请求（章节分页 + 图片分页），惩罚会被成倍放大。
+  //   ⚠️ 务必写死最终域名，不要留会 301 的中间域名。
+  api = 'https://manwari.cc/api';
   // 图片 AES-CBC 解密密钥（从 manwaba.com base.js 提取）
   AES_KEY = '0B6666A0-BB59-1381-B746-a0E4C9AC';
+  // 单页拉取上限（2026-09-01 实测，改这两个值前先看 loadInfo 里的注释）
+  //   章节 API：pageSize 可到 500，一次返回全部（228 条实测无截断）
+  //   图片 API：page_size 硬上限 100，传 500 也只回 100 条（多传无效，别自作聪明改大）
+  CH_PAGE_SIZE = 500;
+  IMG_PAGE_SIZE = 100;
 
   init() {
     this.fetchJson = async (url, { method = 'GET', params, headers, payload } = {}) => {
@@ -96,7 +105,13 @@ class ManWaBa extends ComicSource {
         video: { year: 0, typeId: 0, typeId1: 0, area: '', lang: '', status: -1, day: 0 },
         novel: { status: -1, day: 0, sortId: 0 },
       });
-      let data = await this.fetchJson(url, { method: 'POST', payload }).then((res) => res.data.list);
+      // 修复⑧（2026-09-01）：POST 必须带 Content-Type: application/json，
+      //   否则站点返回 415 Unsupported Media Type（.NET 后端的典型行为），分类页整页报错。
+      let data = await this.fetchJson(url, {
+        method: 'POST',
+        payload,
+        headers: { 'Content-Type': 'application/json' },
+      }).then((res) => res.data.list);
       function parseComic(comic) {
         return new Comic({
           id: comic.url.split('/').pop(),
@@ -190,21 +205,47 @@ class ManWaBa extends ComicSource {
   }
 
   comic = {
-    // 修复②：章节 API 分页参数 pageSize(驼峰)，单页有上限，按页循环拉全
+    // 修复②：章节 API 分页参数 pageSize(驼峰)
+    // 修复⑦（2026-09-01 性能优化）：
+    //   原实现 = 「详情」+「pageSize=1 探测总数」+「按 100 分页循环」共 1+1+N 次**串行**请求，
+    //   每次约 750ms，一本 228 话的漫画要 5 次 ≈ 3.7 秒。
+    //   实测结论：
+    //     a) `comic/{id}` 返回的 `data.id` === 传入的 id → 章节请求不必等详情返回，两者可并发；
+    //     b) 章节 API 的 pageSize 可到 500 且一次返回全部（228 条实测无截断）→ 探测请求可省；
+    //     c) 图片 API 单页**硬上限 100**（page_size=500 也只回 100 条，多传无效）→ 用 100 而非 50。
+    //   优化后：详情 + 章节并发 1 个 RTT ≈ 800ms 出结果；图片列表页数减半且补页并发。
     loadInfo: async (id) => {
-      let url = `${this.api}/comic/${id}`;
-      let data = await this.fetchJson(url, { payload: undefined }).then((res) => res.data);
       let chapterApi = `${this.api}/comic/chapter`;
-      const first = await this.fetchJson(chapterApi, { params: { comicId: data.id, page: 1, pageSize: 1 } });
-      const total = first.pagination.total;
-      const chapters = new Map();
-      const pageSize = 100;
-      const pages = Math.ceil(total / pageSize);
-      for (let p = 1; p <= pages; p++) {
-        const r = await this.fetchJson(chapterApi, { params: { comicId: data.id, page: p, pageSize } });
-        for (const item of r.data) {
-          chapters.set(item.id.toString(), item.title.toString());
+      // 并发发详情 + 章节首页（章节直接用传入 id，不依赖详情结果）
+      const pair = await Promise.all([
+        this.fetchJson(`${this.api}/comic/${id}`, { payload: undefined }),
+        this.fetchJson(chapterApi, {
+          params: { comicId: id, page: 1, pageSize: this.CH_PAGE_SIZE },
+        }),
+      ]);
+      const data = pair[0].data;
+      let raw = pair[1].data || [];
+      const total = pair[1].pagination ? pair[1].pagination.total : raw.length;
+      // 兜底：若服务端截断了（章节数超过单页上限），并发补齐剩余页
+      if (raw.length < total) {
+        const pages = Math.ceil(total / this.CH_PAGE_SIZE);
+        const tasks = [];
+        for (let p = 2; p <= pages; p++) {
+          tasks.push(
+            this.fetchJson(chapterApi, {
+              params: { comicId: id, page: p, pageSize: this.CH_PAGE_SIZE },
+            })
+          );
         }
+        const rest = await Promise.all(tasks);
+        for (let i = 0; i < rest.length; i++) {
+          const list = rest[i].data || [];
+          for (let j = 0; j < list.length; j++) raw.push(list[j]);
+        }
+      }
+      const chapters = new Map();
+      for (let i = 0; i < raw.length; i++) {
+        chapters.set(raw[i].id.toString(), raw[i].title.toString());
       }
       return new ComicDetails({
         title: data.title.toString(),
@@ -216,19 +257,33 @@ class ManWaBa extends ComicSource {
         updateTime: new Date(data.editTime * 1000).toLocaleDateString(),
       });
     },
-    // 修复③：图片 API 分页参数 page_size(下划线)，单页有上限，按页循环拉全
+    // 修复③：图片 API 分页参数 page_size(下划线)
+    // 修复⑦（2026-09-01 性能优化）：单页上限实测为 100（不是 50），且**不需要先发探测请求**——
+    //   首页响应里就带 pagination.total，拿返回条数和 total 比一下就知道还有没有下一页。
+    //   原实现 1 次探测 + N 次分页串行；现在 1 次拿首页 + 剩余页并发。
     loadEp: async (comicId, epId) => {
       const imgApi = `${this.api}/comic/image/${epId}`;
       const base = { image_source: 'https://tu.mhttu.cc' };
-      const first = await this.fetchJson(imgApi, { params: { ...base, page: 1, page_size: 1 } });
-      const total = first.data.pagination.total;
+      const first = await this.fetchJson(imgApi, {
+        params: { ...base, page: 1, page_size: this.IMG_PAGE_SIZE },
+      });
+      const data = first.data || {};
       const images = [];
-      const pageSize = 50;
-      const pages = Math.ceil(total / pageSize);
-      for (let p = 1; p <= pages; p++) {
-        const r = await this.fetchJson(imgApi, { params: { ...base, page: p, page_size: pageSize } });
-        for (const it of r.data.images) {
-          images.push(it.url);
+      const list = data.images || [];
+      for (let i = 0; i < list.length; i++) images.push(list[i].url);
+      const total = data.pagination ? data.pagination.total : images.length;
+      if (images.length < total) {
+        const pages = Math.ceil(total / this.IMG_PAGE_SIZE);
+        const tasks = [];
+        for (let p = 2; p <= pages; p++) {
+          tasks.push(
+            this.fetchJson(imgApi, { params: { ...base, page: p, page_size: this.IMG_PAGE_SIZE } })
+          );
+        }
+        const rest = await Promise.all(tasks);
+        for (let i = 0; i < rest.length; i++) {
+          const l = (rest[i].data || {}).images || [];
+          for (let j = 0; j < l.length; j++) images.push(l[j].url);
         }
       }
       return { images };

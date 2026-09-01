@@ -7,7 +7,7 @@ class JM extends ComicSource {
     // unique id of the source
     key = "jm"
 
-    version = "1.4.1"
+    version = "1.4.2"
 
     minAppVersion = "1.5.0"
 
@@ -20,11 +20,16 @@ class JM extends ComicSource {
 
     dailyCheckInInProgress = false
 
+    // 2026-09-01 实测四线路（/categories/filter 真实 API，3 次中位数）：
+    //   cdnsha 510ms/200 ✅  cdnntr 571ms/200 ✅  cdntwice 1020ms 且 API 404 ❌  cdnaspa DNS 解析失败 ❌
+    // 旧顺序把唯一坏线路 cdntwice 排在第一位当默认（apiDomain 设置默认 '1'），默认用户既慢又可能直接失败。
+    // 按速度重排：最快且健康的放前面，坏线路殿后。动态刷新（refreshDomainsOnStart）成功时会覆盖此表，
+    // 但拉取失败/关闭开关的用户走的就是这份兜底。
     static fallbackServers = [
-        "www.cdntwice.org",
         "www.cdnsha.org",
-        "www.cdnaspa.cc",
         "www.cdnntr.cc",
+        "www.cdntwice.org",
+        "www.cdnaspa.cc",
     ];
 
     static imageUrl = "https://cdn-msp.jmapinodeudzn.net"
@@ -36,8 +41,12 @@ class JM extends ComicSource {
     }
 
     get baseUrl() {
+        // 修复（2026-09-01）：apiDomains 没有静态初值，全靠 refreshApiDomains 动态赋值，
+        //   刷新链路任何一环失败（newsvr 拉取失败 / 用户关闭开关）这里就是 undefined[index] TypeError，
+        //   整个源不可用。兜底到 fallbackServers（已按实测速度重排，cdnsha 最快在首位）。
+        let domains = JM.apiDomains || JM.fallbackServers
         let index = parseInt(this.loadSetting('apiDomain')) - 1
-        return `https://${JM.apiDomains[index]}`
+        return `https://${domains[index]}`
     }
 
     get imageUrl() {
@@ -366,7 +375,7 @@ class JM extends ComicSource {
          * logout function, clear account related data
          */
         logout: () => {
-            for (let url of JM.apiDomains) {
+            for (let url of (JM.apiDomains || JM.fallbackServers)) {
                 Network.deleteCookies(url)
             }
         },
