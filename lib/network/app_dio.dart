@@ -175,9 +175,66 @@ class AppDio with DioMixin {
 }
 
 class RHttpAdapter implements HttpClientAdapter {
-  Future<rhttp.ClientSettings> get settings async {
-    var proxy = await getProxy();
+  // 连接池复用（2026-09-01 性能优化）：
+  // 原实现每个请求都走 rhttp.Rhttp.request(...) 静态方法——它每次调用隐式创建一个
+  // 一次性 reqwest client，请求结束即销毁，keepAliveTimeout 形同虚设。
+  // 实际后果：App 里每个请求都重新付一遍 DNS+TCP+TLS（对跨太平洋图床每张图多 ~500-900ms）。
+  // 现在持有共享 RhttpClient（Rust 侧内置连接池，官方注释明确建议复用），
+  // 设置（代理/DNS/SNI/证书校验）变化时以指纹比对自动重建，行为与原先"每请求取 settings"等价。
+  static rhttp.RhttpClient? _client;
+  static Future<rhttp.RhttpClient>? _creating;
+  static String? _fingerprint;
 
+  Future<rhttp.RhttpClient> _getClient() async {
+    var proxy = await getProxy();
+    var overrides = _getOverrides();
+    var sni = appdata.settings['sni'] != false;
+    var verifyCerts = appdata.settings['ignoreBadCertificate'] != true;
+    // 用原始输入值做指纹（rhttp 的 settings 类没有 toString override，
+    // 默认 toString 是 "Instance of ..."，无区分度，指纹会失效）。
+    var fp = '$proxy#$overrides#$sni#$verifyCerts';
+    var existing = _client;
+    if (existing != null && _fingerprint == fp && _creating == null) {
+      return existing;
+    }
+    // 串行化创建，避免并发请求时重复建 client
+    _creating ??= _rebuild(
+      _buildSettings(proxy, overrides, sni, verifyCerts),
+      fp,
+    );
+    return _creating!;
+  }
+
+  Future<rhttp.RhttpClient> _rebuild(
+      rhttp.ClientSettings s, String fp) async {
+    _client?.dispose(cancelRunningRequests: true);
+    var c = await rhttp.RhttpClient.create(settings: s);
+    _client = c;
+    _fingerprint = fp;
+    _creating = null;
+    return c;
+  }
+
+  Future<rhttp.ClientSettings> get settings {
+    return _settingsAsync();
+  }
+
+  Future<rhttp.ClientSettings> _settingsAsync() async {
+    var proxy = await getProxy();
+    return _buildSettings(
+      proxy,
+      _getOverrides(),
+      appdata.settings['sni'] != false,
+      appdata.settings['ignoreBadCertificate'] != true,
+    );
+  }
+
+  rhttp.ClientSettings _buildSettings(
+    String? proxy,
+    Map<String, List<String>> overrides,
+    bool sni,
+    bool verifyCerts,
+  ) {
     return rhttp.ClientSettings(
       proxySettings: proxy == null
           ? const rhttp.ProxySettings.noProxy()
@@ -189,10 +246,10 @@ class RHttpAdapter implements HttpClientAdapter {
         keepAlivePing: Duration(seconds: 30),
       ),
       throwOnStatusCode: false,
-      dnsSettings: rhttp.DnsSettings.static(overrides: _getOverrides()),
+      dnsSettings: rhttp.DnsSettings.static(overrides: overrides),
       tlsSettings: rhttp.TlsSettings(
-        sni: appdata.settings['sni'] != false,
-        verifyCertificates: appdata.settings['ignoreBadCertificate'] != true,
+        sni: sni,
+        verifyCertificates: verifyCerts,
       ),
     );
   }
@@ -214,7 +271,13 @@ class RHttpAdapter implements HttpClientAdapter {
   }
 
   @override
-  void close({bool force = false}) {}
+  void close({bool force = false}) {
+    // 连接池复用：adapter 关闭时释放共享 client
+    _client?.dispose(cancelRunningRequests: force);
+    _client = null;
+    _fingerprint = null;
+    _creating = null;
+  }
 
   @override
   Future<ResponseBody> fetch(
@@ -227,10 +290,10 @@ class RHttpAdapter implements HttpClientAdapter {
       options.headers['User-Agent'] = "venera/v${App.version}";
     }
 
-    var res = await rhttp.Rhttp.request(
+    var client = await _getClient();
+    var res = await client.request(
       method: rhttp.HttpMethod(options.method),
       url: options.uri.toString(),
-      settings: await settings,
       expectBody: rhttp.HttpExpectBody.stream,
       body: requestStream == null ? null : rhttp.HttpBody.stream(requestStream),
       headers: rhttp.HttpHeaders.rawMap(
