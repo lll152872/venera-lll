@@ -5,7 +5,7 @@ class Baozi extends ComicSource {
   // 唯一标识符
   key = "baozi";
 
-  version = "1.1.6";
+  version = "1.2.0";
 
   minAppVersion = "1.0.0";
 
@@ -39,14 +39,15 @@ class Baozi extends ComicSource {
       title: "图片资源站域名",
       type: "select",
       options: [
-        { value: "as-rsa1-usla.baozicdn.com" },
-        { value: "ascn-a3.bzcdn.net" },
-        { value: "asgb-a3.bzcdn.net" },
         { value: "as.baozimh.com" },
-        { value: "s1.baozicdn.com" },
-        { value: "", text: "默认" },
+        { value: "static-tw.baozimh.com" },
+        { value: "asgb-a3.bzcdn.net" },
+        { value: "", text: "默认（跟随章节页原始域名）" },
       ],
-      default: "",
+      // 2026-09-02 实测：站点章节页返回的原始图床 s1/s.baozicdn.com 已 TCP 拒连（站点下线），
+      // "默认"跟随它们等于死路。as.baozimh.com 画页端到端验证通过（~1s/张）。
+      // 已剔除的死域：as-rsa1-usla.baozicdn.com(502)、ascn-a3.bzcdn.net(拒连)、s1.baozicdn.com(拒连)。
+      default: "as.baozimh.com",
     },
     image_quality: {
       title: "图片质量",
