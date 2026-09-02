@@ -181,6 +181,11 @@ class RHttpAdapter implements HttpClientAdapter {
   // 实际后果：App 里每个请求都重新付一遍 DNS+TCP+TLS（对跨太平洋图床每张图多 ~500-900ms）。
   // 现在持有共享 RhttpClient（Rust 侧内置连接池，官方注释明确建议复用），
   // 设置（代理/DNS/SNI/证书校验）变化时以指纹比对自动重建，行为与原先"每请求取 settings"等价。
+  //
+  // HTTP 版本：保持 rhttp 默认（all，协商到 h2）。
+  // 2026-09-02 曾尝试强制 http1_1 以规避并发场景的 h2 队头阻塞，但实测
+  // rustls+h1.1 的握手指纹会被 Cloudflare 判为 bot（appcn.baozimh.com 403/403），
+  // 而 http2 / all 均为 200 —— 强制 h1.1 会让所有 CF 站点弹验证。已回退。
   static rhttp.RhttpClient? _client;
   static Future<rhttp.RhttpClient>? _creating;
   static String? _fingerprint;
@@ -243,7 +248,6 @@ class RHttpAdapter implements HttpClientAdapter {
       timeoutSettings: const rhttp.TimeoutSettings(
         connectTimeout: Duration(seconds: 15),
         keepAliveTimeout: Duration(seconds: 60),
-        keepAlivePing: Duration(seconds: 30),
       ),
       throwOnStatusCode: false,
       dnsSettings: rhttp.DnsSettings.static(overrides: overrides),
