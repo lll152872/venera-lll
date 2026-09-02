@@ -7,7 +7,7 @@ class JM extends ComicSource {
     // unique id of the source
     key = "jm"
 
-    version = "1.4.2"
+    version = "1.4.3"
 
     minAppVersion = "1.5.0"
 
@@ -348,6 +348,178 @@ class JM extends ComicSource {
         } finally {
             this.dailyCheckInInProgress = false
         }
+    }
+
+    // ---------- 节点延迟测试 ----------
+    async testApiNode(domain) {
+        let url = `https://${domain}/promote?page=1`
+        let time = Math.floor(Date.now() / 1000)
+        let start = Date.now()
+        try {
+            let res = await Promise.race([
+                Network.get(url, this.getApiHeaders(time)),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 4000))
+            ])
+            if (res.status !== 200) {
+                return { success: false, latency: 0 }
+            }
+            return { success: true, latency: Date.now() - start }
+        } catch (e) {
+            return { success: false, latency: 0 }
+        }
+    }
+
+    async optimizeNodes() {
+        UI.showMessage("正在测试节点延迟...")
+        let domains = JM.apiDomains || JM.fallbackServers
+        let promises = domains.map((domain, i) =>
+            this.testApiNode(domain).then(r => ({ index: i + 1, domain: domain, ...r }))
+        )
+        let results = await Promise.all(promises)
+        results.sort((a, b) => {
+            if (!a.success && !b.success) return 0
+            if (!a.success) return 1
+            if (!b.success) return -1
+            return a.latency - b.latency
+        })
+
+        let message = "节点延迟测试结果:\n\n"
+        for (let r of results) {
+            let status = r.success ? `${r.latency}ms` : "连接失败"
+            let mark = (r === results[0] && r.success) ? " 👈 最快" : ""
+            message += `线路${r.index}: ${r.domain}\n延迟: ${status}${mark}\n\n`
+        }
+        if (!results[0].success) {
+            message += "所有节点均连接失败，请检查网络后重试"
+        }
+        UI.showDialog(
+            "节点延迟",
+            message,
+            [
+                { text: "关闭", callback: () => {} },
+                { text: "重新测试", callback: () => setTimeout(() => this.optimizeNodes(), 100) }
+            ]
+        )
+    }
+
+    // ---------- 图片分流测速 ----------
+    async _fetchCdnUrl(index) {
+        try {
+            let res = await this.get(`${this.baseUrl}/setting?app_img_shunt=${index}&express=`)
+            let setting = JSON.parse(res)
+            return setting["img_host"] || null
+        } catch (e) {
+            return null
+        }
+    }
+
+    async _downloadImage(url, timeoutMs) {
+        try {
+            // 用 Range 只取前 256KB，避免下载整张大图拖慢测速；
+            // 支持 200/206 两种返回（部分 CDN 忽略 Range 返回完整图）。
+            let headers = { ...this.getImgHeaders(), "Range": "bytes=0-262143" }
+            let res = await Promise.race([
+                Network.fetchBytes("GET", url, headers),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), timeoutMs))
+            ])
+            if (res.status !== 200 && res.status !== 206) return null
+            let body = res.body
+            if (body instanceof Uint8Array) return body
+            if (body && typeof body.byteLength === "number") return new Uint8Array(body)
+            return new Uint8Array(0)
+        } catch (e) {
+            return null
+        }
+    }
+
+    async _testSingleDomain(cdnUrl, imgBase, imgNames, timeoutMs) {
+        let start = Date.now()
+        let totalSize = 0
+        let anySuccess = false
+        let downloads = imgNames.map(imgName =>
+            this._downloadImage(`${cdnUrl}${imgBase}${imgName}`, timeoutMs)
+        )
+        let results = await Promise.all(downloads)
+        for (let data of results) {
+            if (data !== null) {
+                totalSize += data.byteLength
+                anySuccess = true
+            }
+        }
+        if (!anySuccess || totalSize === 0) {
+            return { speed: 0, size: 0, success: false }
+        }
+        let elapsed = (Date.now() - start) / 1000
+        return {
+            speed: (totalSize / 1024 / 1024) / elapsed,
+            size: totalSize,
+            success: true
+        }
+    }
+
+    _formatSpeed(speedMBps) {
+        if (speedMBps >= 1) {
+            return `${speedMBps.toFixed(2)} MB/s`
+        }
+        return `${(speedMBps * 1024).toFixed(1)} KB/s`
+    }
+
+    _formatSize(bytes) {
+        if (bytes >= 1024 * 1024) {
+            return `${(bytes / 1024 / 1024).toFixed(2)} MB`
+        }
+        return `${(bytes / 1024).toFixed(1)} KB`
+    }
+
+    async testImageSpeed() {
+        const MAX_OPTIONS = 5
+        const TEST_IMG_BASE = "/media/photos/209654/"
+        const TEST_IMG_NAMES = ["00001.webp", "00002.webp", "00003.webp"]
+        const IMG_TIMEOUT_MS = 5000
+
+        UI.showMessage("正在获取分流列表...")
+        let fetchTasks = []
+        for (let i = 1; i <= MAX_OPTIONS; i++) {
+            fetchTasks.push(
+                this._fetchCdnUrl(i).then(url => ({ option: i, url: url }))
+            )
+        }
+        let cdnResults = await Promise.all(fetchTasks)
+
+        UI.showMessage("正在测速...")
+        let testTasks = cdnResults.map(r => {
+            if (!r.url) return Promise.resolve({ speed: 0, size: 0, success: false })
+            return this._testSingleDomain(r.url, TEST_IMG_BASE, TEST_IMG_NAMES, IMG_TIMEOUT_MS)
+                .then(t => ({ option: r.option, url: r.url, ...t }))
+        })
+        let results = await Promise.all(testTasks)
+
+        results.sort((a, b) => {
+            if (!a.success && !b.success) return 0
+            if (!a.success) return 1
+            if (!b.success) return -1
+            return b.speed - a.speed
+        })
+
+        let message = "图片分流测速结果:\n\n"
+        for (let r of results) {
+            let status = r.success
+                ? `${this._formatSpeed(r.speed)}  (${this._formatSize(r.size)})`
+                : "连接失败"
+            let mark = (r === results[0] && r.success) ? " 👈 最快" : ""
+            message += `选项${r.option}:\n${r.url || "获取失败"}\n速度: ${status}${mark}\n\n`
+        }
+        if (results.every(r => !r.success)) {
+            message += "所有节点均连接失败，请检查网络后重试"
+        }
+        UI.showDialog(
+            "图片分流测速",
+            message,
+            [
+                { text: "关闭", callback: () => {} },
+                { text: "重新测速", callback: () => setTimeout(() => this.testImageSpeed(), 100) }
+            ]
+        )
     }
 
     // [Optional] account related
@@ -1082,6 +1254,18 @@ class JM extends ComicSource {
             ],
             default: "1",
         },
+        optimizeNodes: {
+            title: "Optimize Nodes",
+            type: "callback",
+            buttonText: "Start Test",
+            callback: () => this.optimizeNodes()
+        },
+        imageSpeedTest: {
+            title: "Image Speed Test",
+            type: "callback",
+            buttonText: "Start Test",
+            callback: () => this.testImageSpeed()
+        },
         favoriteOrder: {
             title: "Favorite Order",
             type: "select",
@@ -1119,6 +1303,9 @@ class JM extends ComicSource {
             'Api Domain': 'Api域名',
             'Image Stream': '图片分流',
             'Favorite Order': '收藏夹排序',
+            'Optimize Nodes': '节点优选',
+            'Image Speed Test': '图片分流测速',
+            'Start Test': '开始测速',
             'Daily Check-in Task': '每日自动签到',
             'Manual Check-In': '手动签到',
             'Check-In': '签到',
@@ -1137,6 +1324,9 @@ class JM extends ComicSource {
             'Refresh Domain List on Startup': '啟動時刷新域名列表',
             'Api Domain': 'Api域名',
             'Image Stream': '圖片分流',
+            'Optimize Nodes': '節點優選',
+            'Image Speed Test': '圖片分流測速',
+            'Start Test': '開始測速',
             'Favorite Order': '收藏夾排序',
             'Daily Check-in Task': '每日自動簽到',
             'Manual Check-In': '手動簽到',
