@@ -197,3 +197,45 @@ flutter build windows --release --no-pub
 ```
 - 产物：`build/windows/x64/runner/Release/`（含 `venera.exe`、`flutter_windows.dll`、各插件 `.dll` 和 `data/`）。
 - `rm -rf build/windows windows/flutter/ephemeral` 在本机 Bash 工具会被 safe-delete 拦截（>50 项需确认），用 `dangerouslyDisableSandbox` 或手动在资源管理器删。
+
+## 7. 在 WorkBuddy（沙箱 + Bash 工具）里构建 exe（2026-09-08 实测）
+
+> 6.4 的命令在**本机终端**没问题，但 WorkBuddy 的 Bash 工具跑在沙箱里，环境变量被裁剪、代理被劫持，直接用会踩三个坑。下面是最小可用命令 + 坑位说明。
+
+### 7.1 坑一：`%PROGRAMFILES(X86)% environment variable not found.`
+
+- 症状：`flutter build windows` 秒退，报 `%PROGRAMFILES(X86)% environment variable not found.`
+- 根因：flutter 用 `PROGRAMFILES(X86)` 定位 `vswhere.exe`（`flutter_tools/.../windows/visual_studio.dart`）。沙箱 Bash 环境里这个系统变量缺失。
+- **关键**：Git Bash 里 `export 'PROGRAMFILES(X86)=...'` 无效——变量名带括号，bash 不接受。必须用 `env 'PROGRAMFILES(X86)=C:\Program Files (x86)' bash -c '...'` 方式从外层传入。
+
+### 7.2 坑二：代理劫持
+
+- 宿主注入了 `HTTP_PROXY/HTTPS_PROXY=http://127.0.0.1:5162`，会把 flutter tool 的本地通信劫持（同 `flutter test` 的 WebSocketException 一个道理）。
+- 构建命令里要 `unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy`，并 `export NO_PROXY=localhost,127.0.0.1`。
+- 同时必须 `unset PUB_HOSTED_URL FLUTTER_STORAGE_BASE_URL`（防中国镜像污染 FRB，见第 2/3 节）。
+
+### 7.3 坑三：`error C1083 ... Permission denied`
+
+- 症状：编译到 `file_selector_windows` 时报 `无法打开编译器生成的文件 ... messages.g.obj: Permission denied`。
+- 根因：插件中间产物 obj 被占用/锁定（上次残留进程或杀毒）。
+- 修复：删掉该插件的中间目录重试即可（增量构建，其余缓存保留）：
+  ```bash
+  rm -rf build/windows/x64/plugins/file_selector_windows
+  ```
+
+### 7.4 沙箱下最小可用命令（已验证 BUILD_EXIT=0）
+
+```bash
+cd /d/mycode/venera && env 'PROGRAMFILES(X86)=C:\Program Files (x86)' 'PROGRAMFILES=C:\Program Files' bash -c \
+  'export PATH="/d/edge:/d/flutter_3.44.0/bin:$PATH"; \
+   unset PUB_HOSTED_URL FLUTTER_STORAGE_BASE_URL HTTP_PROXY HTTPS_PROXY http_proxy https_proxy; \
+   export NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1; \
+   flutter build windows --release --no-pub > build_log.txt 2>&1; echo "BUILD_EXIT=$?"'
+```
+
+要点：
+- Bash 工具要开 `dangerouslyDisableSandbox: true`（沙箱会阻断 msbuild/cmake 子进程）。
+- 全程约 5-6 分钟，**必须后台跑 + 轮询**（不要前台干等，超时会被自动切后台）。
+- 输出重定向到 `build_log.txt` 再读，别用 `| tail`（拿不到内容）。
+- 跑完 `git checkout -- pubspec.lock`（`flutter build` 会顺手改 lockfile，红线）。
+- 产物校验：`sqlite3.dll` 必须 ≥ 100KB（防空壳），`venera.exe` 只是引导器，要连整个 Release 目录（含 `data/app.so` + `flutter_windows.dll` + 各 plugin dll）一起用。

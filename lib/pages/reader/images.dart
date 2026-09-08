@@ -635,6 +635,9 @@ class SplicedChapters {
 
   static const int kPreloadAhead = 10;
 
+  /// 拼接列表最多保留的章节数（当前章 + 前后邻居）。超出后不再自动拼接。
+  static const int kMaxSplicedChapters = 3;
+
   int get length => images.length;
   int get chapterCount => _chapNums.length;
 
@@ -647,6 +650,11 @@ class SplicedChapters {
     _chapLens = [initialImages.length];
     appendingNext = false;
     allNextLoaded = false;
+    // 必须一并复位向上回滚的状态位：此前只复位 append 侧，切章后
+    // prependingPrev/allPrevLoaded 残留 true，导致 shouldPrependPrev 恒假，
+    // 向上无缝回滚在整次阅读会话里永久失效（谜之"拼不回上一章"）。
+    prependingPrev = false;
+    allPrevLoaded = false;
   }
 
   /// Returns (chapterNum, localPage, chapterLen) for the given global page.
@@ -712,6 +720,8 @@ class SplicedChapters {
   bool shouldPrependPrev(int currentGp) {
     if (prependingPrev || allPrevLoaded) return false;
     if (currentGp > kPreloadAhead) return false;
+    // 同 [shouldAppendNext]：限制拼接窗口，避免级联拼接 + 无谓重建。
+    if (_chapNums.length >= kMaxSplicedChapters) return false;
     int prev = firstChapterNum - 1;
     if (prev < 1 || _chapNums.contains(prev)) return false;
     return true;
@@ -720,6 +730,11 @@ class SplicedChapters {
   /// Whether the spliced list should try appending the next chapter.
   bool shouldAppendNext(int currentGp) {
     if (appendingNext || allNextLoaded) return false;
+    // 拼接窗口上限：只允许"当前章 + 前后各一章"。没有上限时，短章节
+    // （页数 ≤ kPreloadAhead + 几页）会在章首就满足阈值，append 后新尾部
+    // 仍满足 → 一帧内连锁拼进好几章，每次拼接都整列表重建（实测一次滚动
+    // 触发 200 次 item 构建，列表中积压 3 章），这是翻页卡顿的主要来源。
+    if (_chapNums.length >= kMaxSplicedChapters) return false;
     if (images.length - currentGp > kPreloadAhead) return false;
     // 防重复：下一章若已在拼接列表中则不再 append
     int next = lastChapterNum + 1;
@@ -739,6 +754,28 @@ class SplicedChapters {
 
   /// Whether a chapter number is already spliced into the list.
   bool containsChapter(int n) => _chapNums.contains(n);
+}
+
+/// 为什么不用 [ListView.builder]：它的 [SliverChildBuilderDelegate.shouldRebuild]
+/// 恒为 false，ListView 只有在 itemCount 变化时才去拉取新数据，**已存在的 index
+/// 永远不会 rebuild**。于是"切到下一章但两章页数相同"时，itemCount 不变，界面
+/// 一直渲染上一章的图片 —— 用户侧表现就是"点了下一章没反应 / 图片不加载"。
+///
+/// 这里显式实现 shouldRebuild：只有拼接版本号或 childCount 变化才重建 children。
+/// 常态（单张图片解码完成、缩放/指针标志等 setState）保持不变，避免每次
+/// setState 都把整列表重建一遍。
+class _SplicedPageDelegate extends SliverChildBuilderDelegate {
+  _SplicedPageDelegate(
+    super.builder, {
+    required this.version,
+    required super.childCount,
+  }) : super(addSemanticIndexes: false);
+
+  final int version;
+
+  @override
+  bool shouldRebuild(covariant _SplicedPageDelegate oldDelegate) =>
+      version != oldDelegate.version || childCount != oldDelegate.childCount;
 }
 
 class ContinuousMode extends StatefulWidget {
@@ -885,6 +922,11 @@ class ContinuousModeState extends State<ContinuousMode>
   /// ── Cross-chapter seamless scrolling data ──
   late final SplicedChapters _spliced = SplicedChapters();
 
+  /// 结构性换血版本号（见 [_resetSplicedState]）。
+  /// 变化时才给 ListView 换 key，强制 children 按新数据重建一次；值稳定时
+  /// 列表保持原有 element，行为与之前一致。
+  int _spliceVersion = 0;
+
   /// 恒定 GlobalKey：强制 ListView 的 element 永久复用，
   /// 避免每帧 build 时 element 销毁重建导致滚动位置(pixels)归零（回退）。
   final GlobalKey _listKey = GlobalKey();
@@ -1025,7 +1067,7 @@ class ContinuousModeState extends State<ContinuousMode>
 
   void _resetSplicedState() {
     _spliced.reset(reader.images!, reader.chapter);
-    // 关键修复：必须清空 _pageHeights，否则旧章的高度数据残留，
+    // 关键修复：必须重建 _pageHeights，否则旧章的高度数据残留，
     // 新章页数/图片高度不同时 key 错位：
     //   - 旧章 16 页 → _pageHeights 有 key 1..16
     //   - 新章 10 页 → _spliced 重置为 10 页，但 _pageHeights[11..16] 仍是旧章数据
@@ -1041,6 +1083,26 @@ class ContinuousModeState extends State<ContinuousMode>
     _itemContexts.clear();
     _lastSyncedGp = -1;
     _prependZone.clear();
+    // 修复"切章后整列表高度 600<->400 反复抖动"：清空后所有页都退回占位
+    // 高度，每张图解码完再缩回真实高度 → 一张一次 setState + 一次全列表重排
+    // （用户观感：卡顿、位置漂）。ImageSizeCache 里若已有该图真实像素尺寸，
+    // 立刻回填 _pageHeights——这些页从第一帧起就是终值，不再抖动，
+    // _offsetForGp 的跳转估算也随之准确（此前用占位高累加必然偏）。
+    if (_layoutCrossAxis > 0) {
+      for (var i = 0; i < _spliced.length; i++) {
+        final sz = ImageSizeCache.instance.get(_spliced[i]);
+        if (sz != null) {
+          _pageHeights[i + 1] =
+              _computeAxisSize(sz.width.toInt(), sz.height.toInt());
+        }
+      }
+    }
+    // 结构性换血标记：ListView.builder 的 SliverChildBuilderDelegate 未变时
+    // 不会 rebuild 已有 index 的 children，只有 itemCount 变化才去拉新数据。
+    // 两章页数相同时 itemCount 不变 → 切章后界面仍渲染上一章的内容
+    // （"点了下一章没反应/图片不加载"）。版本号变化让 ListView 换 key 整体
+    // 重建一次；滚动位置由外部持有的 _scrollController 保存，不受影响。
+    _spliceVersion++;
   }
 
   /// prepend 后一次性集中平移所有按 index 索引的结构(向上无缝回滚核心)。
@@ -1226,22 +1288,28 @@ class ContinuousModeState extends State<ContinuousMode>
       _spliced.markPrepending(false);
       return;
     }
-    final double delta = pages.length * _placeholderPageHeight; // kPageSpacing=0
+    // 补偿量在 doSplice 里基于预填页高精确计算（见下）。
+    var estDelta = 0.0;
     void doSplice() {
       setState(() {
         reader.dbg('[DBG] _prependPrevChapter BEFORE setState itemCount=${_spliced.length}');
         int n = _spliced.prepend(pages, prev);
         _shiftIndices(n);
+        estDelta = 0;
         for (var i = 1; i <= n; i++) {
-          // 预填 _pageHeights 仅供 _offsetForGp 跳转估算;zone 补偿基准是占位高,
-          // 与预填值无关(命中页布局仍是占位高,见 onImageLoaded zone 分支)。
+          // 预填 _pageHeights：命中 ImageSizeCache 的页用真实显示高度，
+          // 否则退占位高。补偿量与 zone 补偿基准都用这个估计值——
+          // 旧实现统一用占位高(n*600)，而命中尺寸缓存的页第一帧就按
+          // 真实高度布局，jumpTo 先冲到 n*600，随后 zone 又逐页把 offset
+          // 拉回真实值，用户看到的就是"先跳一大段再慢慢滑回来"的闪跳。
           final sz = ImageSizeCache.instance.get(_spliced[i - 1]);
           _pageHeights[i] = sz != null
               ? _computeAxisSize(sz.width.toInt(), sz.height.toInt())
               : _placeholderPageHeight;
+          estDelta += _pageHeights[i]! + kPageSpacing;
           _prependZone.add(i);
         }
-        reader.dbg('[DBG] _prependPrevChapter AFTER splice itemCount=${_spliced.length} offsets=${_spliced._offsets} delta=$delta zone=${_prependZone.length}');
+        reader.dbg('[DBG] _prependPrevChapter AFTER splice itemCount=${_spliced.length} offsets=${_spliced._offsets} estDelta=$estDelta zone=${_prependZone.length}');
       });
     }
     // prepend 由 scroll listener 触发，可能正处在 build 中（列表头部插入后
@@ -1262,8 +1330,8 @@ class ContinuousModeState extends State<ContinuousMode>
     // 在过渡帧反算出错误 gp(旧布局),必须被抑制,否则 GP REJECTED 误杀。
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && _scrollController.hasClients) {
-        reader.dbg('[DBG] _prependPrevChapter jumpTo offset=${_scrollController.offset} + $delta');
-        _scrollController.jumpTo(_scrollController.offset + delta);
+        reader.dbg('[DBG] _prependPrevChapter jumpTo offset=${_scrollController.offset} + $estDelta');
+        _scrollController.jumpTo(_scrollController.offset + estDelta);
       }
       _spliced.markPrepending(false);
     });
@@ -1346,7 +1414,10 @@ class ContinuousModeState extends State<ContinuousMode>
     _itemContexts.forEach((index, ctx) {
       if (!ctx.mounted) return;
       final ro = ctx.findRenderObject();
-      if (ro is! RenderBox || !ro.attached) return;
+      // hasSize 不能省：图片同步命中 ImageCache 时回调会一路触发
+      // jumpTo -> scroll listener -> 本函数，此刻 item 还没 layout，
+      // 只判 attached 会走到 ro.size 抛 "RenderBox was not laid out"。
+      if (ro is! RenderBox || !ro.attached || !ro.hasSize) return;
       // 只考虑与视口有交集的 item；视口外缓存区 item 直接跳过
       if (viewportRect != null) {
         final itemRect = ro.localToGlobal(Offset.zero) & ro.size;
@@ -1426,8 +1497,29 @@ class ContinuousModeState extends State<ContinuousMode>
     _resetSplicedState();
     _cachedSize = _spliced.length + kCacheGrowthPadding;
     cached = List.filled(_cachedSize, false);
+    // 切章是用户"显式跳转"：跳到这一章开头就停住，不要立刻向上无缝回滚
+    // 到跳转前那一章。否则 gp=1 正好落在拼接列表头部，_syncReaderState 会
+    // 马上 prepend 上一章，把滚动位置从 0 推到"整整一章高度"——用户看到
+    // 的就是点完下一章内容/页码猛跳。向上回滚只应由连续滚动在跨章边界
+    // 触发（读回顶部时），需要回去可用上一章按钮。
+    _spliced.markAllPrevLoaded();
+    // 先把"这一章要停在哪一页"记下来。不能在 postFrame 里再读 reader.page：
+    // 重建后的过渡帧里 item 布局还没更新，scroll listener 会用旧位置反算出
+    // 一个错误的 gp 并写回 reader.page —— 之后 _offsetForGp 就跳到一个
+    // 完全不相干的偏移。
+    final int targetPage = reader.page;
+    // 必须自己 setState：ListView.builder 不会因为 _spliced 内容变了就去
+    // rebuild children，只有这里 trigger 一次重建，新章的内容才会真正渲染
+    // （版本号已递增 → children 全部重读新数据）。
+    // 生产里虽然通常还会跟着一次 _ReaderState.update()，但不能依赖它——
+    // 那次 setState 可能与本帧合并或被别的分支吃掉。
+    setState(() {});
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _scrollController.jumpTo(_offsetForGp(reader.page));
+      if (!mounted) return;
+      if (reader.page != targetPage) {
+        reader.setPage(targetPage);
+      }
+      _scrollController.jumpTo(_offsetForGp(targetPage));
       _appendNextChapter(); // immediately splice next chapter for seamless reading
     });
   }
@@ -1508,11 +1600,29 @@ class ContinuousModeState extends State<ContinuousMode>
                 // _pageHeights 已预填真实高，但布局仍是占位高，按 h-old 会漏补偿。
                 // 故补偿判断与 _pageHeights 更新完全独立，zone.remove 只成功一次。
                 if (_prependZone.remove(index)) {
-                  final double delta2 = h - _placeholderPageHeight;
+                  // 补偿基准 = 预填估计高（命中尺寸缓存的页从第一帧起就是
+                  // 真实高度，此时 delta2≈0，不再多补）；未命中时估计高 =
+                  // 占位高，行为与旧实现一致。旧实现一律用占位高，导致命中
+                  // 缓存的页被过度补偿 → offset 反复被拉扯（闪跳）。
+                  final double est =
+                      _pageHeights[index] ?? _placeholderPageHeight;
+                  final double delta2 = h - est;
                   if (delta2 != 0 && _scrollController.hasClients) {
                     _futurePosition = null;
-                    reader.dbg('[DBG] zone compensate idx=$index h=$h placeholder=$_placeholderPageHeight delta=$delta2 offset=${_scrollController.offset}');
-                    _scrollController.jumpTo(_scrollController.offset + delta2);
+                    // 图片可能同步命中 ImageCache（element mount 期间 image
+                    // stream 就给出帧），此时正处在 build/layout 阶段：
+                    // jumpTo 会同步通知 scroll listener -> _syncReaderState ->
+                    // _currentPageFromViewport，而新 item 还没有 size。
+                    // 延迟到帧后再补，和下面 setState/postFrame 的节奏对齐。
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (!mounted || !_scrollController.hasClients) return;
+                      final double target = _scrollController.offset + delta2;
+                      if ((target - _scrollController.offset).abs() < 0.5) {
+                        return;
+                      }
+                      reader.dbg('[DBG] zone compensate idx=$index h=$h placeholder=$_placeholderPageHeight delta=$delta2 offset=${_scrollController.offset}');
+                      _scrollController.jumpTo(target);
+                    });
                   }
                 }
                 if ((old - h).abs() > 0.5) {
@@ -1723,11 +1833,21 @@ class ContinuousModeState extends State<ContinuousMode>
     // Test seam 取值提前：下面局部变量 `widget` 会遮蔽 State.widget，
     // 故用 this.widget 显式访问成员。
     final double? cacheExtentOverride = this.widget.debugCacheExtent;
-    Widget widget = ListView.builder(
+    // 用 ListView.custom + 自定义 delegate：这样能在"章节数据整体替换"时
+    // 只重建 children（版本号变化 -> shouldRebuild=true），而 ListView /
+    // ScrollPosition 本身不重建。
+    // 不能靠给 ListView 换 key 来达成同一目的：换 key 会连同 Scrollable 一起
+    // 重建，ScrollController 新建 ScrollPosition 时拿不到旧 pixels（也没有
+    // PageStorage 键），实测 offset 会跌到负数、页码钉死在第 1 页。
+    Widget widget = ListView.custom(
       key: _listKey,
       controller: _scrollController,
-      itemCount: _spliced.length + 2,
-      addSemanticIndexes: false,
+      childrenDelegate: _SplicedPageDelegate(
+        _buildSplicedItem,
+        version: _spliceVersion,
+        childCount: _spliced.length + 2,
+      ),
+      // addSemanticIndexes 由 delegate 负责（见 _SplicedPageDelegate）
       // 测试态覆盖 cacheExtent（全量 build item），生产传 null 走默认
       // 250px 缓存区，行为不变。注意必须用旧 API cacheExtent：项目基线
       // Flutter 3.41.4（pubspec environment）没有 scrollCacheExtent 参数
@@ -1749,7 +1869,6 @@ class ContinuousModeState extends State<ContinuousMode>
       // _layoutCrossAxis 算的存储高 → 累加偏移算大 → 页间可变白间隙。
       // 设 zero 后 item 约束宽 == 父约束宽 == _layoutCrossAxis，同源无间隙。
       padding: EdgeInsets.zero,
-      itemBuilder: _buildSplicedItem,
     );
 
     widget = Stack(
