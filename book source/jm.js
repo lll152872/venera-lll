@@ -7,7 +7,7 @@ class JM extends ComicSource {
     // unique id of the source
     key = "jm"
 
-    version = "1.4.3"
+    version = "1.4.4"
 
     minAppVersion = "1.5.0"
 
@@ -369,6 +369,35 @@ class JM extends ComicSource {
         }
     }
 
+    /**
+     * 把 select 类设置项写回书源设置存储。
+     *
+     * 背景：venera 未给书源开放 saveSetting —— Dart 侧只有 load_setting（读），
+     * 且 save_data 显式拦截 `dataKey === 'setting'`（单数）。但书源设置实际存在
+     * `data['settings']`（复数）里，设置页读写的也是同一个键（comic_source_page.dart）。
+     *
+     * 所以这里走 saveData('settings', ...) 整对象读-改-写：
+     * 改完 baseUrl / refreshImgUrl 立即生效，设置页下拉也会同步显示（重进设置页可见）。
+     *
+     * 为避开跨语言对象往返时键枚举的不确定性，不读回旧对象，而是从 this.settings
+     * 声明重建全部标量项（跳过 callback 类），保证不弄丢用户已改过的其它设置。
+     */
+    _applySetting(key, value) {
+        let next = {}
+        if (this.settings) {
+            for (let k of Object.keys(this.settings)) {
+                let def = this.settings[k]
+                if (!def || def.type === "callback") continue
+                try {
+                    let v = this.loadSetting(k)
+                    if (v !== undefined && v !== null) next[k] = v
+                } catch (e) { }
+            }
+        }
+        next[key] = value
+        this.saveData("settings", next)
+    }
+
     async optimizeNodes() {
         UI.showMessage("正在测试节点延迟...")
         let domains = JM.apiDomains || JM.fallbackServers
@@ -383,23 +412,31 @@ class JM extends ComicSource {
             return a.latency - b.latency
         })
 
-        let message = "节点延迟测试结果:\n\n"
-        for (let r of results) {
+        if (!results.length || !results[0].success) {
+            UI.showMessage("所有节点均连接失败，请检查网络后重试")
+            return
+        }
+
+        // 测完直接给出可选列表，选中即写回 apiDomain 设置并生效
+        let current = parseInt(this.loadSetting('apiDomain'))
+        let options = results.map(r => {
             let status = r.success ? `${r.latency}ms` : "连接失败"
-            let mark = (r === results[0] && r.success) ? " 👈 最快" : ""
-            message += `线路${r.index}: ${r.domain}\n延迟: ${status}${mark}\n\n`
+            let cur = r.index === current ? "【当前】" : ""
+            let fast = (r === results[0] && r.success) ? "  👈最快" : ""
+            return `线路${r.index}${cur}  ${r.domain}  ${status}${fast}`
+        })
+        let initial = results.findIndex(r => r.index === current)
+        if (initial < 0) initial = 0
+
+        let sel = await UI.showSelectDialog("节点延迟测试 - 选择要使用的线路", options, initial)
+        if (sel === null || sel === undefined) return
+        let chosen = results[sel]
+        if (!chosen || !chosen.success) {
+            UI.showMessage("该线路连接失败，未切换")
+            return
         }
-        if (!results[0].success) {
-            message += "所有节点均连接失败，请检查网络后重试"
-        }
-        UI.showDialog(
-            "节点延迟",
-            message,
-            [
-                { text: "关闭", callback: () => {} },
-                { text: "重新测试", callback: () => setTimeout(() => this.optimizeNodes(), 100) }
-            ]
-        )
+        this._applySetting('apiDomain', String(chosen.index))
+        UI.showMessage(`已切换到 线路${chosen.index}：${chosen.domain}`)
     }
 
     // ---------- 图片分流测速 ----------
@@ -501,25 +538,35 @@ class JM extends ComicSource {
             return b.speed - a.speed
         })
 
-        let message = "图片分流测速结果:\n\n"
-        for (let r of results) {
-            let status = r.success
-                ? `${this._formatSpeed(r.speed)}  (${this._formatSize(r.size)})`
-                : "连接失败"
-            let mark = (r === results[0] && r.success) ? " 👈 最快" : ""
-            message += `选项${r.option}:\n${r.url || "获取失败"}\n速度: ${status}${mark}\n\n`
-        }
         if (results.every(r => !r.success)) {
-            message += "所有节点均连接失败，请检查网络后重试"
+            UI.showMessage("所有分流均连接失败，请检查网络后重试")
+            return
         }
-        UI.showDialog(
-            "图片分流测速",
-            message,
-            [
-                { text: "关闭", callback: () => {} },
-                { text: "重新测速", callback: () => setTimeout(() => this.testImageSpeed(), 100) }
-            ]
-        )
+
+        // 测完直接给出可选列表，选中即写回 imageStream 设置并立即切换当前图床
+        let current = this.loadSetting('imageStream')
+        let options = results.map(r => {
+            let status = r.success
+                ? `${this._formatSpeed(r.speed)} (${this._formatSize(r.size)})`
+                : "连接失败"
+            let cur = String(r.option) === String(current) ? "【当前】" : ""
+            let fast = (r === results[0] && r.success) ? "  👈最快" : ""
+            return `选项${r.option}${cur}  ${status}${fast}  ${r.url || "获取失败"}`
+        })
+        let initial = results.findIndex(r => String(r.option) === String(current))
+        if (initial < 0) initial = 0
+
+        let sel = await UI.showSelectDialog("图片分流测速 - 选择要使用的分流", options, initial)
+        if (sel === null || sel === undefined) return
+        let chosen = results[sel]
+        if (!chosen || !chosen.success) {
+            UI.showMessage("该分流连接失败，未切换")
+            return
+        }
+        this._applySetting('imageStream', String(chosen.option))
+        // 测速时已拿到该分流的图床地址，直接覆盖当前 imageUrl，无需再请求 /setting
+        if (chosen.url) this.overwriteImgUrl(chosen.url)
+        UI.showMessage(`已切换到 选项${chosen.option}：${chosen.url}`)
     }
 
     // [Optional] account related
