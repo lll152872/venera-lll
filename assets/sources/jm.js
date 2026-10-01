@@ -7,7 +7,7 @@ class JM extends ComicSource {
     // unique id of the source
     key = "jm"
 
-    version = "1.4.4"
+    version = "1.4.5"
 
     minAppVersion = "1.5.0"
 
@@ -20,17 +20,22 @@ class JM extends ComicSource {
 
     dailyCheckInInProgress = false
 
-    // 2026-09-01 实测四线路（/categories/filter 真实 API，3 次中位数）：
-    //   cdnsha 510ms/200 ✅  cdnntr 571ms/200 ✅  cdntwice 1020ms 且 API 404 ❌  cdnaspa DNS 解析失败 ❌
-    // 旧顺序把唯一坏线路 cdntwice 排在第一位当默认（apiDomain 设置默认 '1'），默认用户既慢又可能直接失败。
-    // 按速度重排：最快且健康的放前面，坏线路殿后。动态刷新（refreshDomainsOnStart）成功时会覆盖此表，
+    // 2026-10-01 实测（/categories/filter 真实 API，多次中位数）：
+    //   cdnutc.me 682ms ✅  cdngwc.net 1.7s ⚠️  cdngwc.cc 2.0s ⚠️  cdngwc.club 7.2s ❌慢
+    //   cdnhjk.net TLS 握手超时 ❌（官方动态列表却把它排第一！）
+    //   cdnsha.org / cdnntr.cc 公共 DNS 已删记录（本地靠缓存苟活，随时死），移除。
+    // 动态刷新成功时会覆盖此表（坏域会被 overwriteApiDomains 自动排到最后），
     // 但拉取失败/关闭开关的用户走的就是这份兜底。
     static fallbackServers = [
-        "www.cdnsha.org",
-        "www.cdnntr.cc",
-        "www.cdntwice.org",
-        "www.cdnaspa.cc",
+        "www.cdnutc.me",
+        "www.cdngwc.net",
+        "www.cdngwc.cc",
+        "www.cdnhjk.net",
     ];
+
+    // 已知坏域：动态刷新拿到列表后把这些排到最后，避免 apiDomain 默认 '1' 命中死线路
+    // （官方 newsvr 列表把 cdnhjk 排第一，而它 TLS 握手超时——盲信官方顺序会整源挂掉）
+    static knownBadServers = ["www.cdnhjk.net"];
 
     static imageUrl = "https://cdn-msp.jmapinodeudzn.net"
 
@@ -54,7 +59,18 @@ class JM extends ComicSource {
     }
 
     overwriteApiDomains(domains) {
-        if (domains.length != 0) JM.apiDomains = domains
+        if (domains.length != 0) {
+            // 修复（2026-10-01）：官方 newsvr 列表把 TLS 握手超时的坏域排在第一位，
+            // 而 apiDomain 设置默认 '1' 直接命中它 → 整源挂。
+            // 拿到列表后把已知坏域挪到最后，健康线路保持官方相对顺序。
+            let good = []
+            let bad = []
+            for (let d of domains) {
+                if (JM.knownBadServers.includes(d)) bad.push(d)
+                else good.push(d)
+            }
+            JM.apiDomains = good.concat(bad)
+        }
     }
 
     overwriteImgUrl(url) {
@@ -150,7 +166,13 @@ class JM extends ComicSource {
         if (res && res.status === 200) {
             let data = this.convertData(await res.text(), domainSecret)
             let json = JSON.parse(data)
-            if (json["Server"]) {
+            // 2026-10-01：优先用 jm3_Server（5 条线路，含实测最快的 cdnutc.me），
+            // 老的 Server 字段只有 4 条且把坏域 cdnhjk 排第一
+            if (json["jm3_Server"]) {
+                title = "Update Success"
+                message = "\n"
+                servers = json["jm3_Server"].map((x) => x[0]).slice(0, 5)
+            } else if (json["Server"]) {
                 title = "Update Success"
                 message = "\n"
                 servers = json["Server"].slice(0, 4)
@@ -1278,6 +1300,9 @@ class JM extends ComicSource {
                 },
                 {
                     value: '4',
+                },
+                {
+                    value: '5',
                 },
             ],
             default: "1",
