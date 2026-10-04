@@ -16,7 +16,7 @@
 class Mhua5 extends ComicSource {
   name = '漫画屋';
   key = 'mhua5';
-  version = '1.0.0';
+  version = '1.0.1';
   minAppVersion = '1.4.0';
   url = 'https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/mhua5.js';
 
@@ -91,26 +91,44 @@ class Mhua5 extends ComicSource {
     },
   ];
 
-  // 分类：站点 /index.php/category/tags/{id}，id 与名称从首页导航动态抓（26 个）
+  // 分类：站点 /index.php/category/tags/{id}
+  // ★ 结构必须严格对齐 App 的 _loadCategoryData()（lib/foundation/comic_source/parser.dart:430）：
+  //   category.title 必填字符串（缺了 App 直接 return null，整个分类页看不到这个源）
+  //   parts[].name（不是 title）、parts[].type='fixed'、parts[].itemType='category'
+  //   categories 与 categoryParams 长度必须相等
+  //
+  // ⚠️ 为什么硬编码而不运行时抓：App 在 parser.dart 里是
+  //   `runCode("...init()")` **同步调用、不 await Promise**，紧接着同步解析 category。
+  //   异步抓分类来不及（首次进分类页只有「全部」），init() 里抓也不行。
+  //   下面这份是 2026-10-04 实测的 22 个分类，两数组严格一一对应。
+  //   ensureCategories() 会在打开分类页时异步刷新，站点改版后能自愈。
   category = {
+    title: this.name,
     parts: [
       {
-        title: '漫画屋分类',
-        categories: ['全部'],
-        categoryParams: ['0'],
+        name: '漫画屋分类',
+        type: 'fixed',
+        itemType: 'category',
+        categories: [
+          '全部', '热血', '冒险', '科幻', '霸总', '玄幻', '校园', '修真', '搞笑', '穿越',
+          '后宫', '耽美', '恋爱', '悬疑', '恐怖', '战争', '动作', '同人', '竞技', '励志',
+          '架空', '灵异', '百合',
+        ],
+        categoryParams: [
+          '0', '6', '7', '8', '9', '10', '11', '12', '13', '14',
+          '15', '16', '17', '18', '19', '20', '21', '22', '23', '24',
+          '25', '26', '27',
+        ],
       },
     ],
-    load: async (page) => {
-      // 首次进入动态抓分类名，之后写回 parts（惰性初始化，App 重启后仍生效）
-      await this.ensureCategories();
-      return {};
-    },
+    enableRankingPage: false,
   };
 
+  // 异步刷新分类（打开分类页时触发），抓到的更多才覆盖。
   async ensureCategories() {
     if (this._cats && this._cats.length > 1) return this._cats;
-    let names = ['全部'];
-    let params = ['0'];
+    let names = [];
+    let params = [];
     try {
       let res = await this.get('/');
       if (res.status === 200) {
@@ -123,25 +141,27 @@ class Mhua5 extends ComicSource {
           let id = m[1];
           if (seen.has(id)) continue;
           let name = (a.text || a.attributes['title'] || '').trim();
-          if (!name || name.length > 10) continue;
+          if (!name || name.length > 8) continue;
           seen.add(id);
           names.push(name);
           params.push(id);
         }
       }
     } catch (e) {
-      // 抓不到就保留「全部」
+      // 忽略，用硬编码那份
     }
-    this._cats = names;
-    // categories 与 categoryParams 必须严格一一对应
-    this.category.parts[0].categories = names;
-    this.category.parts[0].categoryParams = params;
-    return names;
+    if (names.length > this.category.parts[0].categories.length - 1) {
+      this.category.parts[0].categories = ['全部', ...names];
+      this.category.parts[0].categoryParams = ['0', ...params];
+    }
+    this._cats = this.category.parts[0].categories;
+    return this._cats;
   }
 
   categoryComics = {
     load: async (category, param, options, page) => {
-      await this.ensureCategories();
+      // 后台异步刷新分类名（不阻塞本次加载）
+      this.ensureCategories();
       let pid = param || '0';
       let url = pid === '0' ? '/' : '/index.php/category/tags/' + pid;
       let res = await this.get(url);

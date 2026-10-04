@@ -288,6 +288,61 @@ const contracts = [
 ];
 for (const [name, ok] of contracts) check(`contract: ${name}`, ok);
 
+// ---------- category 结构契约（照 lib/foundation/comic_source/parser.dart:430 实现）----------
+// App 侧 _loadCategoryData() 的硬性要求，缺任何一项整个分类会被静默丢弃：
+//   ① category 必须是对象且有字符串 title —— 没有直接 return null，分类页看不到这个源
+//   ② parts[].name（不是 title）
+//   ③ parts[].type === 'fixed' | 'random' | 'dynamic'
+//   ④ 旧格式还需 itemType === 'category'，否则 PageJumpTarget 拿不到跳转目标
+//   ⑤ categories 与 categoryParams 必须严格一一对应（长度相同）
+// 历史教训：只验 categoryComics.load 存在是不够的，结构错了测试照样「全过」，
+// 但 App 里分类页一个分类都不显示。
+{
+  const cat = inst.category;
+  const problems = [];
+  if (cat == null || typeof cat !== 'object') {
+    problems.push('category 不是对象');
+  } else {
+    if (typeof cat.title !== 'string' || !cat.title) {
+      problems.push(`category.title 缺失或非字符串（当前: ${JSON.stringify(cat.title)}）→ App 会直接丢弃整个分类`);
+    }
+    if (!Array.isArray(cat.parts) || !cat.parts.length) {
+      problems.push('category.parts 为空');
+    } else {
+      cat.parts.forEach((p, i) => {
+        const at = `parts[${i}]`;
+        if (typeof p?.name !== 'string' || !p.name) problems.push(`${at}.name 缺失（用了 title? App 只认 name）`);
+        if (p?.type !== 'fixed' && p?.type !== 'random' && p?.type !== 'dynamic') {
+          problems.push(`${at}.type 必须是 fixed/random/dynamic（当前: ${JSON.stringify(p?.type)}）`);
+        }
+        if (!Array.isArray(p?.categories) || !p.categories.length) {
+          problems.push(`${at}.categories 为空`);
+        }
+        // 旧格式（非 Map 分类）必须有 itemType: 'category'
+        if (Array.isArray(p?.categories) && p.categories.length && typeof p.categories[0] !== 'object') {
+          if (p.itemType !== 'category') {
+            problems.push(`${at}.itemType 必须是 'category'（当前: ${JSON.stringify(p.itemType)}）→ 分类项点不动`);
+          }
+          if (p.categoryParams != null) {
+            if (!Array.isArray(p.categoryParams)) {
+              problems.push(`${at}.categoryParams 必须是数组`);
+            } else if (p.categoryParams.length !== p.categories.length) {
+              problems.push(`${at}.categories(${p.categories.length}) 与 categoryParams(${p.categoryParams.length}) 长度不等 → 参数错位`);
+            }
+          }
+        }
+      });
+    }
+  }
+  check('category 结构契约（App 渲染前提）', problems.length === 0,
+    problems.length ? problems.join('; ') : `title="${cat?.title}" parts=${cat?.parts?.length}`);
+  // 分类项数量（顺带报出来，方便对比 App 里显示几个）
+  if (Array.isArray(cat?.parts?.[0]?.categories)) {
+    const n = cat.parts[0].categories.length;
+    console.log(`  ℹ 分类项: ${n} 个（${cat.parts[0].categories.slice(0, 6).map((x) => typeof x === 'object' ? x.label : x).join('/')}${n > 6 ? '...' : ''}）`);
+  }
+}
+
 // ---------- LIVE ----------
 let firstComic = null, firstEpId = null, exploreFirst = null, searchFirst = null, lastErr = null;
 if (LIVE) {

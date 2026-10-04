@@ -59,14 +59,14 @@
     "name": "漫画屋",
     "key": "mhua5",
     "fileName": "mhua5.js",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "url": "https://ghproxy.net/https://raw.githubusercontent.com/lll152872/venera-lll/master/book%20source/mhua5.js"
   },
   {
     "name": "酷笔漫画",
     "key": "kubb",
     "fileName": "kubb.js",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "url": "https://ghproxy.net/https://raw.githubusercontent.com/lll152872/venera-lll/master/book%20source/kubb.js"
   }
 ]

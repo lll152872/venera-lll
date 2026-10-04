@@ -29,7 +29,7 @@
 class Kubb extends ComicSource {
   name = '酷笔漫画';
   key = 'kubb';
-  version = '1.0.0';
+  version = '1.0.1';
   minAppVersion = '1.4.0';
   url = 'https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/kubb.js';
 
@@ -94,23 +94,87 @@ class Kubb extends ComicSource {
     },
   ];
 
+  // 分类：站点 /dir/{国别}/{分类}/{排序}/{页码}
+  // ★ 结构必须严格对齐 App 的 _loadCategoryData()（lib/foundation/comic_source/parser.dart:430）：
+  //   category.title 必填字符串（缺了 App 直接 return null，整个分类页看不到这个源）
+  //   parts[].name（不是 title）、parts[].type='fixed'、parts[].itemType='category'
+  //   categories 与 categoryParams 长度必须相等
+  //
+  // ⚠️ 为什么硬编码而不运行时抓：App 在 parser.dart 里是
+  //   `runCode("...init()")` **同步调用、不 await Promise**，紧接着同步解析 category。
+  //   所以异步抓分类来不及（首次进分类页仍只有「全部」），init() 里抓也不行。
+  //   下面这份是 2026-10-04 实测的完整 61 个分类，categories 与 categoryParams 严格一一对应。
+  //   ensureCategories() 会在用户打开分类页时异步刷新并写回，站点改版后能自愈。
   category = {
+    title: this.name,
     parts: [
       {
-        title: '酷笔分类',
-        categories: ['全部', '热门', '完结'],
-        categoryParams: ['0/0/1/1', '0/0/2/1', '0/0/1/0'],
+        name: '酷笔分类',
+        type: 'fixed',
+        itemType: 'category',
+        categories: [
+          '全部', '热血', '冒险', '动作', '都市', '恋爱', '彩虹', '日漫', '校园', '玄幻',
+          '高H', '待分类', '韩漫', '生', '架空', '耽美', '悬疑', '年下攻', '后宫', '甜文',
+          '漫画', '励志', '同人', '腹黑攻', '短篇', '健气受', '竞技', '恐怖', '清水', 'ABO',
+          '穿越', '古风', '诱受', '可爱受', '霸总', '科幻', '美人受', '傲娇受', '战争', '青梅竹马',
+          '灵异', '总裁', '壮受', '淫荡受', '巨屌', '兽耳', '办公室恋情', '美人攻', '忠犬攻', '奇幻',
+          '生活', '修真', '纯爱', '异能', '正太', 'Sm', '灵', '巨乳',
+        ],
+        categoryParams: [
+          '0/0/1/1', '0/2/1/1', '0/3/1/1', '0/4/1/1', '0/5/1/1', '0/6/1/1', '0/7/1/1', '0/8/1/1', '0/9/1/1', '0/10/1/1',
+          '0/11/1/1', '0/12/1/1', '0/13/1/1', '0/14/1/1', '0/15/1/1', '0/16/1/1', '0/17/1/1', '0/18/1/1', '0/19/1/1', '0/20/1/1',
+          '0/21/1/1', '0/22/1/1', '0/23/1/1', '0/24/1/1', '0/25/1/1', '0/26/1/1', '0/27/1/1', '0/28/1/1', '0/29/1/1', '0/30/1/1',
+          '0/31/1/1', '0/32/1/1', '0/33/1/1', '0/34/1/1', '0/35/1/1', '0/36/1/1', '0/37/1/1', '0/38/1/1', '0/39/1/1', '0/40/1/1',
+          '0/41/1/1', '0/42/1/1', '0/43/1/1', '0/44/1/1', '0/45/1/1', '0/46/1/1', '0/47/1/1', '0/48/1/1', '0/49/1/1', '0/50/1/1',
+          '0/51/1/1', '0/52/1/1', '0/53/1/1', '0/55/1/1', '0/56/1/1', '0/57/1/1', '0/58/1/1', '0/59/1/1',
+        ],
       },
     ],
-    load: async (page) => ({}),
+    enableRankingPage: false,
   };
+
+  // 异步刷新分类（打开分类页时触发）。写回 parts[0] 的两个数组。
+  // 抓不到就保持硬编码那份，不影响使用。
+  async ensureCategories() {
+    if (this._cats && this._cats.length > 1) return this._cats;
+    let names = [];
+    let params = [];
+    try {
+      let res = await this.get(this.listUrl);
+      if (res.status === 200) {
+        let doc = new HtmlDocument(res.body);
+        let seen = new Set(['0/0/1/1']);
+        for (let a of doc.querySelectorAll('a')) {
+          let href = a.attributes['href'] || '';
+          let m = href.match(/\/dir\/(\d+\/\d+\/\d+\/\d+)/);
+          if (!m) continue;
+          let key = m[1];
+          if (seen.has(key)) continue;
+          let name = (a.text || a.attributes['title'] || '').trim();
+          if (!name || name.length > 6) continue; // 过滤「全部分类」等导航标题
+          seen.add(key);
+          names.push(name);
+          params.push(key);
+        }
+      }
+    } catch (e) {
+      // 忽略，用硬编码那份
+    }
+    // 只有抓到的比硬编码那份更多才覆盖（避免站点临时异常导致分类变少）
+    if (names.length > this.category.parts[0].categories.length) {
+      this.category.parts[0].categories = ['全部', ...names];
+      this.category.parts[0].categoryParams = ['0/0/1/1', ...params];
+    }
+    this._cats = this.category.parts[0].categories;
+    return this._cats;
+  }
 
   categoryComics = {
     load: async (category, param, options, page) => {
-      // /dir/0/0/{排序}/{页码}  —— 实测 ?page=N 只在 /1/1 路径上验证过
-      let base = this.listUrl;
-      if (param && param !== '0/0/1/1') base = this.baseUrl + '/dir/' + param;
-      let res = await this.get(base + (page > 1 ? '?page=' + page : ''));
+      let key = param || '0/0/1/1';
+      // 后台异步刷新分类名（不阻塞本次加载）
+      this.ensureCategories();
+      let res = await this.get('/dir/' + key + (page > 1 ? '?page=' + page : ''));
       if (res.status !== 200) throw 'Invalid status: ' + res.status;
       return { comics: this.parseComics(res.body) };
     },

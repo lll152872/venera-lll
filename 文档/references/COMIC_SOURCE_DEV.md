@@ -561,3 +561,58 @@ og:image / og:description
 | 漫网 | manwang | 1.0.0 | ✅ 13/14（站内搜索已废） |
 | **漫画屋** | **mhua5** | **1.0.0** | ✅ **14/14**（新） |
 | **酷笔漫画** | **kubb** | **1.0.0** | ✅ **14/14**（新） |
+
+## 19. ★★ category 结构契约（写书源必看，踩过两次）
+
+**App 里分类页能不能显示，完全取决于 `category` 对象结构对不对。结构错了测试照样「全过」，
+但 App 分类页一个分类都不显示。** 2026-10-04 踩了这个坑：
+mhua5 和 kubb 报「14/14 全通过」，实际分类页是空的。
+
+### 19.1 App 的硬性要求（`lib/foundation/comic_source/parser.dart:430` `_loadCategoryData()`）
+```js
+category = {
+  title: this.name,        // ① 必填字符串！缺了直接 return null，整个分类页看不到这个源
+  parts: [{
+    name: '分类组名',       // ② 是 name，不是 title
+    type: 'fixed',         // ③ 必须是 fixed / random / dynamic
+    itemType: 'category',  // ④ 旧格式必填，否则 PageJumpTarget 拿不到跳转目标 → 点了没反应
+    categories: ['全部', '热血', ...],
+    categoryParams: ['0', '6', ...],   // ⑤ 与 categories 长度必须严格相等，否则参数错位
+  }],
+  enableRankingPage: false,
+}
+```
+只有 ① 缺了会被**静默丢弃**（返回 null），不报错不打日志——最难查的一种。
+②③④ 缺了会走到 `parser.dart:503` 的 else 分支，target 传 null，分类项点不动。
+
+正确范例见 `book source/manwaba.js` 的 `category`。
+
+### 19.2 为什么分类名要硬编码，不能运行时抓
+App 在 `parser.dart:174` 是 `runCode("...init()")` —— **同步调用，不 await Promise**，
+紧接着就同步解析 `category`。所以：
+- 在 `init()` 里异步抓分类 → **来不及**，首次进分类页仍只有第一项
+- 在 `categoryComics.load` 里抓 → 首次点分类也是空的
+
+**正确做法**：硬编码实测的完整分类列表（名称 + param 两数组一一对应），
+再留一个 `ensureCategories()` 在打开分类页时异步刷新，**抓到更多才覆盖**（防止站点临时异常导致分类变少）。
+
+### 19.3 测试器已补的两道防线
+1. **`book_source_test.mjs` 新增 `category 结构契约（App 渲染前提）`** ——
+   照 `_loadCategoryData()` 逐条校验 ①~⑤，并在通过时打印分类项数与前几项名称。
+2. **新增 `test/book_source_test/cat_test.mjs`** —— 联调 `category` + `categoryComics`，
+   实际去点 4 个分类项（第 0/1/中间/最后），看能不能真加载出漫画。
+   ```bash
+   node cat_test.mjs "../../book source/kubb.js"
+   ```
+   写这个脚本时踩的 mock 坑（都已在文件里注释）：
+   - `HtmlDocument` 必须是**类**（书源写 `new HtmlDocument(html)`），不能是 `{create}` 对象
+   - `querySelectorAll` 必须返回**真数组**（length + 数字下标），返回包装对象会在
+     `for (let a of doc.querySelectorAll('a'))` 上死循环
+   - `Network.get` 返回 **`{status}`** 不是 `{statusCode}`，书源判断 `res.status`
+   - `Network.sendRequest` 签名是 `(method, url, headers, data, extra)`（`assets/init.js:498`），
+     manwaba 等源走这个，不 mock 就报 `Network.sendRequest is not a function`
+
+### 19.4 分类页空 ≠ 书源 bug
+实测 mhua5 的「耽美(16)」「百合(27)」返回 0 本：直接 curl 站点，
+`tags/27` 标题正确、页面 26KB、**0 张漫画卡片** —— 是站点该分类本来就没书。
+遇到 0 本先 curl 确认，别急着改解析逻辑。
