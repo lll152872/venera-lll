@@ -308,3 +308,256 @@ python bench_sources.py          # 结果打印到终端 + 写 bench_result.json
 - `randomInt`（copy_manga 设备信息生成用）、`Network.fetchBytes`（hitomi 二进制分片用，**body 必须返回 ArrayBuffer**，因为 hitomi 直接 `new DataView(res.body)`；Uint8Array 会 TypeError）。
 - `init()` 必须 `await`（jm 的 init 是 async 且有网络副作用，不 await 的话失败变成 unhandled rejection，后续全链路莫名崩溃）。
 - 跨 vm `instanceof Map` 恒为 false（构造函数跨 realm 不同），spread/for...of 同样失效（Symbol.iterator 跨 realm 不通用）——用鸭式 `isMap`（get/forEach/size）+ `forEach` 遍历。
+
+## 16. 漫网 manwang.net 新源（2026-10-04）
+
+用户给 `https://www.manwang.net/book/507169` 要求做书源。产出 `book source/manwang.js` + `assets/sources/manwang.js`（两份同步）+ index.json v1.0.0。测试器 live **13/14**（唯一失败项是站点自身搜索失效）。
+
+### 站点结构（纯 HTML，无可用 API）
+
+| 用途 | URL | 实测 |
+|---|---|---|
+| 最近更新 | `/custom/update/page/{n}/` | 30 本/页 |
+| 分类 | `/category/tags/{tagId}/page/{n}/` | 30 本/页，分页条尾页 50 |
+| 详情 | `/book/{comicId}` | 章节全在页内，**无章节分页接口**（1328 章的元尊也是一次全出） |
+| 章节 | `/chapter/{comicId}-{chapterId}` | 图片列表在加密 params 里 |
+
+分页 URL 格式坑：`?page=2`、`/2`、`/tags/2585-2` **全都无效**（静默返回第 1 页，size 一字不差），只有 `/page/2/`（带尾斜杠）真分页。第 1 页用不带 `/page/1/` 的形式。
+
+### 图片解密（核心难点）
+
+章节页 `var tpl_path='…', params='<base64>'`，由 `/template/pc/33/js/pic-v2.js` 的 `decryptParams()` 解密。该 js 是 jsjiami 混淆 + 数组自轮转，**静态解混淆不可行**（`_0x392f` 字符串表带 IIFE 轮转），必须真跑。做法：Node + `vm` 起 sandbox，shim 掉 `$`（**要收集 ready 回调延后执行**，立即执行会因 `params` 未定义抛 "Unexpected end of JSON input" 并中断整个文件），注入 CryptoJS，`hook CryptoJS.AES.decrypt` 抓 key/iv。
+
+**最终算法（纯 Node crypto 独立复现验证）**：
+```
+key  = '9S8$vJnU2ANeSRoF'            (16 字节 ASCII → AES-128)
+raw  = base64decode(params)
+iv   = raw[0:16]
+ct   = raw[16:]
+→ AES-128-CBC 解密 → UTF-8 → JSON{host, source_id, comic_id, chapter_id, images[]}
+```
+5 本书 × 首/中/末章共 7 次解密全部通过，单章 50~216 张。
+
+**两个把人带沟里的假线索**：
+1. **hook 出来的 iv 是 64 字节，照抄必炸**。那 64 字节 = `iv[16:]` 与 `ct` 前 48 字节的重叠（CBC 解密只用 iv 前 16 字节，混淆代码 `slice(0,0x10)` 的 0x10 是 16 个 **word** 不是字节… 实测按 16 字节切才对）。按 64 字节传给 `createDecipheriv` 直接 `Invalid initialization vector`。
+2. `source_id == 12` 才走 `decryptImage` 的图片级 AES 解密且需换域名 `img1.baipiaoguai.org`；本源实测 `source_id == 15`，**图片是明文 WebP，不需要任何图片解密**。别被 `mwp` 兜底数组误导。
+
+### 图片防盗链（硬性）
+
+图床只有 `dmw.546457.xyz`（采样 471 张全是它）。**必须带 `Referer: https://www.manwang.net/`**（站点根，不能带路径）才 200：
+- 无 referer → 403 text/html
+- `Referer: https://example.com/` → 403（不是"有 referer 就行"，是白名单）
+- 正确 referer → 200 image/webp
+
+书源侧写在 `comic.onImageLoad` 返回的 `headers` 里。
+
+### 传字节给 Dart 的坑（复用价值高）
+
+Dart 端 `Convert.decryptAesCbc`（`js_engine.dart` aes-cbc 分支）走 `CBCBlockCipher.processBlock`，**只认 Uint8List 且不去 PKCS#7 padding**。两条铁律：
+1. **必须传 `.buffer`（ArrayBuffer）**。普通数组→`List<dynamic>`、Uint8Array→`Map`，都报类型错。
+2. **绝不能把字节拼成 String 再传**。字节 ≥0x80 时 JS 字符串按 UTF-16 存，接收侧取字节按 UTF-8 重编码 → 长度膨胀 → IV 直接失效。最初就是 `String.fromCharCode` 拼 latin1 串，症状是 `Invalid initialization vector`（长度不对，不是密钥不对，**别往密钥方向查**）。
+3. 返回值尾部带 padding，**必须自己剥**（末字节 = N 则末尾 N 字节都是 N），否则 `JSON.parse` 直接抛。
+
+书源里写成：优先 `sendMessage`（App 真实路径），`typeof sendMessage !== 'function'` 时降级 `Convert.decryptAesCbc`，两条都传 `.buffer`。这样 App 和测试器都能跑。
+
+### 分类表：必须运行时动态抓
+
+站点有 **601 个标签**，id 与名称**无法凭直觉对应**——2583 是「编剧」不是「恋爱」、2585 才是「玄幻」。猜 id 全错。
+`init()` 里抓 `/category` 页的 `<a href="/category/tags/{id}">{name}</a>` 建 `tagCache`，同 id 多次出现取首个，然后写回 `category.parts[0].categories`（名称）与 `.categoryParams`（id，两者**严格一一对应**）。
+时序安全性：App 在 `parser.dart:174` 用 `Future.delayed(50ms)` 调 `init()`，分类页打开远晚于此；且 `fallbackTags` 兜底 12 项，抓取失败也不会空。
+各分类内容量差异极大：玄幻/系统/穿越/热血 30 部，但**恋爱(2617) 只有 3 部、都市 4 部、搞笑 14 部**——不是解析漏了，是站点内容就少（实测 grep 计数确认）。
+
+### 站点自身的问题（不是书源 bug，别去"修"）
+
+- **站内搜索彻底失效**：`/search/{kw}`、`/search?keyword=`、`/index.php/search?key=`（GET/POST 全试）对任意书名一律返回「搜索结果（0）」，索引已废。故 `search.load` 直接抛可读错误，不静默返回空。
+- **大量书已下架**：`/book/{id}` → 302 → `/err/comic`（165 字节错误页），热门老书居多（狐妖小红娘 501660、王牌御史 503737、武炼巅峰 500907…）。16 本抽样里 4 本下架。
+  ⚠️ **App 的 `Network.get` 自动跟随 3xx**，所以 `res.status` 永远看不到 302，拿到的是「200 + 错误页 body」。只按 status 判会误报"结构可能已变"。必须再按 body 特征兜底：`body.length < 600 && !body.includes('detail-title')` → 判下架。
+
+### 验证结果
+
+玄幻 + 奇幻各抽 8 本共 16 本：12 本可用（每本抽首/中/末 3 章解密 + 首图 HTTP 200 校验，共 36 次图片下载全通过，累计解密 2246 张图）、4 本站点下架（正确识别）、0 失败。
+
+## 17. 虫虫漫画搜索修复 + 从异次元图源库挖站（2026-10-04）
+
+### 17.1 虫虫 warchina 搜索为什么永远返回同一个东西
+**根因：书源用的端点根本不存在，站点搜索后端已被官方关闭。**
+
+旧代码 `this.baseUrl + '/search?keyword=' + kw` —— 实测这个端点**根本不读 keyword**：
+
+| 关键词 | 返回字节 | 漫画数 |
+|---|---|---|
+| 海贼王 | 59403 | 84 |
+| 火影忍者 | 59403 | 84 |
+| 鬼灭之刃 | 59403 | 84 |
+| zzz不存在 | 59403 | 84 |
+
+那 84 本全来自页面里的「JJ韩漫更新」「更新排行」等**推荐位**，`/search?keyword=` 实际是**首页镜像**。
+
+**真实端点**（从 `statics/js/b.min.js` 的 `All.S()` 逆向）：
+```
+/statics/search.aspx?key=<encodeURIComponent(kw)>     ← 参数名是 key 不是 keyword
+```
+但该端点 HTTP 200、`<title>` 正确变成「搜索XX相关的漫画」，**结果容器 `<div class="clearfix"></div>` 是空的**。
+JS 里明写 `if (All.P=="2"){ alert("您好，搜索功能暂时关闭!"); return false; }` → **站点已关闭搜索**。
+
+**修法（v1.0.3）：全库索引 + 客户端精筛**
+- 分页 `/comic/{n}.html`（30 本/页）。**`/comic/?page=2` 是假的**，每页都返回同样 30 本。
+- `p>=100` 返回 404 首页（84 本推荐位），上限 99，实测**全库 2333 本**。
+- 越界页用 `cards.length > 60` 挡掉防污染。
+- `search.load` 两级：① 先试真实端点（站点万一恢复就命中）② 兜底抓全库按标题 AND 匹配。
+- 24 小时索引缓存（`saveData('index', {d, l:[[id,title,cover]]})`）。
+- 实测：搜索「高校传说」→ 1 条精确命中，41 章，81 张图。
+- ⚠️ 虫虫是**纯韩漫库**，搜「海贼王」返回 0 是正常的。
+- ⚠️ 虫虫证书 2026-08-20 已过期，需开 `设置→调试→ignoreBadCertificate`。
+
+### 17.2 分页参数拼错不会 404，只会静默返回第 1 页（跨站规律）
+- warchina: `/comic/{n}.html` ✅ / `/comic/?page=n` ❌
+- manwang: `/page/{n}/` ✅（带尾斜杠）/ `?page=n` ❌ / `/n` ❌
+
+**测分页必须比对不同页的字节数是否相同**，只看 status 判不出来。
+
+### 17.3 从异次元图源库挖真实域名（别再猜域名）
+猜域名 vs 社区维护的图源库，效果差 3.5 倍：
+
+| 来源 | 域名数 | 搜索真生效 |
+|---|---|---|
+| 瞎猜（两轮） | 95 | 4（全是正版） |
+| 异次元图源库 | 222 | **14** |
+
+**数据源**：`https://gcore.jsdelivr.net/gh/yiciyuan123/yiciyuan/<合集名>.json`
+合集名：`weiguanfang` / `sanyuetuyuan` / `siyuetuyuan` / `eryuetuyuan` / `shougongxiaojian` /
+`yiciyuantuyuan` / `qishiliu` / `bayuezuixintuyuan` / `ershisantuyuan`
+
+⚠️ 三个必知点：
+1. 文件是 **base64 + zlib 双重编码** → `base64.b64decode` → `zlib.decompress` → `json.loads`。
+   直接 `json.load` 报 `Expecting value: line 1 column 1`。
+2. 每条含 `bookSourceUrl`（站点域名）+ `ruleSearchUrl`（**含真实参数名**，如 `search_key=` / `title=` / `key=`）。
+3. **解析规则里的选择器是加密的**（`:_H006_xxx==`），读不出明文 —— 只能用端点，不能抄规则。
+
+**GitHub 官方域名（api.github.com / raw.githubusercontent.com）本机被墙**，走 jsDelivr 通。
+venera 的 fork 仓（ikznbfin/nekoqwq/Maplespe）已全部 404。
+
+### 17.4 HTTP 探测的三个坑（都误判过）
+1. **chunked + gzip 双重编码**：部分站同时发 `Transfer-Encoding: chunked` + `Content-Encoding: gzip`。
+   裸 socket 读到的 body 前缀是 chunk 头 `1f0f\r\n` 再跟 gzip magic `1f8b`。
+   只按 Content-Encoding 解压会失败 → **全文匹配恒为 0**，把有数据的站误判成"没数据"（我误判了 3 轮）。
+   必须先剥 chunked 帧再 gzip 解压。
+2. **重定向伪装成功**：`/comic/107477` → 301 → `/comic/107477/`(404)，跟随后拿到**首页**，
+   首页里当然"有 79 个章节链接"——全是假的。**验详情页必须看重定向前的状态码**。
+3. **中文路径必须 quote()**，否则 socket 层直接连接失败。
+
+### 17.5 判断站能不能当书源的唯一可靠判据
+**同关键词 vs 乱码关键词，两次响应必须不同。** 光看首页 200 没用：
+
+| 站点 | 搜「海贼王」 | 搜乱码 | 结论 |
+|---|---|---|---|
+| 次元仓 | 1000B | 1000B | 搜索是废的 |
+| 漫本 | 12050B | 12050B | 搜索是废的 |
+| K漫画 | 8954B | 8954B | 搜索是废的 |
+| 幻书阁 | 196B | 196B | 域名停放卖钱 |
+
+**工具**：`book source/probe_yciyuan.py`（解合集提域名）/ `probe_ycy_final.py`（终判，带 dechunk）/ `probe_ycy_chain.py`（全链路）
+**结果**：`book source/YCY_FINDINGS.md`（14 站端点清单 + API 模板）
+
+### 17.6 ★ 漫画屋 mhua5.com 新源（v1.0.0，测试器 14/14 全通过）
+免费国漫站，图床是包子漫画的 `s*.baozimh.com`。
+
+```
+搜索  /index.php/search/{kw}          （也支持 ?key=）
+详情  /index.php/comic/{slug}         slug 是拼音，如 haizeiwangaisi
+章节  /index.php/chapter/{数字id}
+分类  /index.php/category/tags/{id}   26 个，id 从首页导航动态抓
+```
+
+实测：搜索「海贼王」6 条 → loadInfo《海贼王 艾斯》4 章 → loadEp 50 张 → 图片 747923B magic=ffd8ffe00010。
+
+**三个 HTML 陷阱**（照抄通用）：
+1. `<a class="cover">` 上**没有 title 属性**，书名在 `<img alt=" 海贼王 艾斯 ">`（**前后有空格要 trim**）。
+2. 真封面在 **`data-original`**，`src` 是 `bg_loadimg_3x4.png` 占位图。
+3. 章节页 img 数量**含推荐位**，按 `/scomic/` 路径过滤才准（该章真实 50 张，页面 66 个 img）。
+
+### 17.7 看漫/漫画台系 API 模板（备选，尚未做成源）
+`m.manhuatai.com`(mht) / `m.kanman.com`(kmh) / `m.isamanhua.com`(samh) /
+`m.iyouman.com`(iymh) / `m.taomanhua.com`(tmh) 是**同一套 API 模板**，只差 `productname`：
+
+```
+搜索 /api/getsortlist/?search_key={kw}&page=1&size=30&productname={PN}&platformname=wap
+  → {data:{page:{count,total_page}, data:[{comic_id,comic_name,comic_author,comic_desc,
+     last_chapter_name,update_time,shoucang,renqi}]}}
+详情 /api/getcomicinfo_body?comic_id={id}&productname={PN}&platformname=wap
+  → {data:{comic_name,comic_author,comic_desc,comic_chapter:[627章],last_chapter_id,...}}
+章节 comic_chapter[] 每项：{chapter_name,chapter_id,chapter_topic_id,chapter_domain,
+     rule:"/comic/M/{书名}/第613话F0_393471/$$.jpg",islock,price,start_num,end_num}
+```
+实测 `kanman comic_id=107477` → 224KB / 627 章。
+
+⚠️ **卡在图片这步**：`dm300.com` 图床活着（HTTP 200），但 `$$` 替换成 `1.jpg` 实请求 **404**。
+真实页码格式在异次元的加密选择器里，要继续必须逆向。
+
+### 17.8 书源测试器本轮修的两处
+1. **id 配对**（记忆里 9 月就记过，今天真修）：`firstComic` 取自 category 列表、`firstEpId` 取自另一本书
+   → `/chapter/{A}-{B}` 必 404。修法：`const pairedComic = chosen || candidates[0] || firstComic;`
+2. **候选顺序**：`[firstComic, searchFirst, exploreFirst]` 改成 `[searchFirst, firstComic, exploreFirst]`。
+   否则「搜 A 的词、却验 explore 里 B 的章节」，源没问题也误报 loadEp 失败。
+3. 顺带：图片校验原来固定 `fetch(ep.images[0])`，**绕过了 onImageLoad 的图床改写**。
+   现在解析 `cfg.img || cfg.imageUrl || cfg.url || cfg.src` 并校验 `size>1500 && magic 是 ffd8/8950/WEBP`。
+
+## 18. 酷笔漫画 kubb.cc 新源（v1.0.0，测试器 14/14 全通过）
+
+用户提供 `https://www.kubb.cc/user/login`，实测可用并做成书源。
+
+### 18.1 ★ 最特殊的坑：按 UA 分流，桌面 UA 一律 403
+```
+桌面 Chrome UA → 403 Forbidden（nginx 层，915 字节）
+iPhone Safari UA → 200（46KB）
+```
+**书源 headers 里必须写 iPhone UA**，改成桌面 UA 这个源直接死。带 cookie 复访也无效（纯 UA 判定）。
+
+### 18.2 站点结构
+```
+全部分类 : /dir/0/0/1/1?page=N      每页 30 本，?page= 有效
+分类树   : /dir/{a}/{b}/{c}/{d}      第 4 段是排序(1=最新 2=热门)
+漫画详情 : /byf/{书拼音}.html        ← 详情与分类同路径格式
+章节     : /evf/{书拼音}/{章节拼音}.html
+图片     : 章节页 <img src="https://{p|t}.wx4.top/...">，WebP 直链
+404 页   : 带 <meta http-equiv="refresh" content="2; url=/">，会自动跳首页
+```
+
+### 18.3 站点没有搜索功能
+`/search` `/search.html` `/so` `/find` `/ss` `/sitemap` 全 404，JS（base.js / s.js / t.js）里也没有搜索端点。
+`sitemap/comic/{n}.xml` 是**无限分片**（每片 2000 条）且**只有拼音 URL 没有书名**，不能用来建索引。
+
+**替代方案**：`search.load` 抓 `/dir/0/0/1/1?page=1..30` 建全库索引（30×30=900 本），
+按书名客户端筛选，缓存 24h（`saveData('index', {d, l:[[slug,title]]})`）。
+实测「鬼」→12 本、「狼」→5 本、乱码 →0 本。
+
+### 18.4 详情页用标准 Open Graph 漫画协议（字段很好解析）
+```
+og:comic:book_name / og:comic:author / og:comic:category / og:comic:status
+og:comic:update_time / og:comic:latest_chapter_name / og:comic:latest_chapter_url
+og:image / og:description
+```
+比解析正文稳。注意 `og:title` 前面会带《》和「(下拉式观看)」，要用 `og:comic:book_name` 才是纯书名。
+书名里常有 HTML 实体（`&#43;` `&#x...;`），要反转义。
+
+### 18.5 图床两个坑
+1. **子域名不固定**：`p.wx4.top` 和 `t.wx4.top` 都见过 → 必须匹配整个 `wx4.top` 域，不能写死 `p.`。
+2. **文件名是哈希无页码**（`1669065588bf604042da50d06f239d6f_zb.webp`）→
+   **不能按数字排序**，HTML 里的出现顺序就是正确阅读顺序。
+   （对比 mhua5 的 `1.jpg 2.jpg` 就有页码可以排序 —— 别混了这两种。）
+
+实测 62KB~435KB/张，**不校验 referer**（带与不带都是 200），magic=RIFF（真 WebP）。
+
+### 18.6 当前书源清单（10 个）
+| 源 | key | 版本 | 状态 |
+|---|---|---|---|
+| 拷贝漫画 | copy_manga | 1.4.1 | 官方源，超时 |
+| 包子漫画 | baozi | 1.2.0 | 403（需完整浏览器 UA+referer） |
+| 禁漫天堂 | jm | 1.4.5 | ✅ 13/14 |
+| hitomi.la | hitomi | 1.1.2 | 本机超时 |
+| 漫蛙吧 | manwaba | 1.4.0 | ✅ 13/14 |
+| 虫虫漫画 | warchina | 1.0.3 | ✅ 12/13（需开证书忽略） |
+| 漫画柜 | ManHuaGui | 1.2.1 | 连接超时 |
+| 漫网 | manwang | 1.0.0 | ✅ 13/14（站内搜索已废） |
+| **漫画屋** | **mhua5** | **1.0.0** | ✅ **14/14**（新） |
+| **酷笔漫画** | **kubb** | **1.0.0** | ✅ **14/14**（新） |

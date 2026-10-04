@@ -1,0 +1,98 @@
+{
+  "www.1kkk.com": {
+    "search_alive": false,
+    "hits": 31,
+    "title": "极速漫画_在线漫画_为看漫画的人而生",
+    "search_tpl": "http://www.1kkk.com/search?title={kw}&language=1&page=searchPage",
+    "home": "http://www.1kkk.com",
+    "chain": "✗详情打不开"
+  },
+  "m.manhuatai.com": {
+    "search_alive": false,
+    "hits": 30,
+    "title": "穿越西元3000后漫画 斗罗大陆漫画 斗破苍穹漫画 漫画大全 看漫网 看漫画",
+    "search_tpl": "https://m.manhuatai.com/api/getsortlist/?search_key={kw}&page=searchPage&size=30&productname=mht&platformname=wap",
+    "home": "https://m.manhuatai.com",
+    "chain": "✗详情打不开"
+  },
+  "m.taomanhua.com": {
+    "search_alive": false,
+    "hits": 30,
+    "title": "穿越西元3000后漫画 斗罗大陆漫画 斗破苍穹漫画 漫画大全 看漫网 看漫画",
+    "search_tpl": "https://m.taomanhua.com/api/getsortlist/?search_type=&search_key={kw}&page=searchPage&size=30&productname=smh&platformname=wap",
+    "home": "https://m.taomanhua.com",
+    "chain": "✗详情打不开"
+  },
+  "m.kanman.com": {
+    "search_alive": false,
+    "hits": 14,
+    "title": "穿越西元3000后漫画 斗罗大陆漫画 斗破苍穹漫画 漫画大全 看漫网 看漫画",
+    "search_tpl": "https://m.kanman.com/api/getsortlist/?product_id=1&search_key={kw}&page=searchPage&size=30&productname=kmh&platformname=wap",
+    "home": "https://m.kanman.com",
+    "chain": "⚠️有章节未见图"
+  },
+  "www.dongman.la": {
+    "search_alive": false,
+    "hits": 13,
+    "title": "",
+    "search_tpl": "https://www.dongman.la/manhua/so/{kw}/searchPage.html",
+    "home": "http://www.dongman.la",
+    "chain": "★全链路通"
+  },
+  "m.isamanhua.com": {
+    "search_alive": false,
+    "hits": 30,
+    "title": "穿越西元3000后漫画 斗罗大陆漫画 斗破苍穹漫画 漫画大全 看漫网 看漫画",
+    "search_tpl": "https://m.isamanhua.com/api/getsortlist/?product_id=1&search_key={kw}&page=searchPage&size=30&productname=asmh&platformname=wap",
+    "home": "https://m.isamanhua.com",
+    "chain": "⚠️有章节未见图"
+  },
+  "www.dingmanhua.com": {
+    "search_alive": false,
+    "hits": 3,
+    "title": "",
+    "search_tpl": "https://www.dingmanhua.com/search/?query={kw}&page=searchPage",
+    "home": "https://www.dingmanhua.com",
+    "chain": "★全链路通"
+  },
+  "m.iyouman.com": {
+    "search_alive": false,
+    "hits": 30,
+    "title": "穿越西元3000后漫画 斗罗大陆漫画 斗破苍穹漫画 漫画大全 看漫网 看漫画",
+    "search_tpl": "https://m.iyouman.com/api/getsortlist/?search_type=&search_key={kw}&page=searchPage&size=30&productname=aym&platformname=wap",
+    "home": "https://m.iyouman.com",
+    "chain": "⚠️有章节未见图"
+  },
+  "cn.bzmanga.com": {
+    "search_alive": false,
+    "hits": 22,
+    "title": "",
+    "search_tpl": "https://cn.bzmanga.com/search?q={kw}",
+    "home": "https://cn.bzmanga.com",
+    "chain": "⚠️详情通但无章节"
+  },
+  "www.mhua5.com": {
+    "search_alive": false,
+    "hits": 12,
+    "title": "",
+    "search_tpl": "https://www.mhua5.com/index.php/search?key={kw}",
+    "home": "https://www.mhua5.com",
+    "chain": "★全链路通"
+  },
+  "www.jdlingyu.com": {
+    "search_alive": false,
+    "hits": 3,
+    "title": "",
+    "search_tpl": "https://www.jdlingyu.com/?s={kw}&post_type=post",
+    "home": "http://www.jdlingyu.com",
+    "chain": "★全链路通"
+  },
+  "cn.webmota.com": {
+    "search_alive": false,
+    "hits": 22,
+    "title": "",
+    "search_tpl": "https://cn.webmota.com/search?q={kw}",
+    "home": "https://cn.webmota.com",
+    "chain": "⚠️详情通但无章节"
+  }
+}

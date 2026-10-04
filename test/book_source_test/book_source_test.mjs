@@ -98,10 +98,18 @@ const DEFAULT_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 //jm.js 等源的 API 签名头/数据解密全走 Convert，没有它 jm 系源完全测不了。
 // ECB/CBC 均不去 padding（与 Dart 端 ECBBlockCipher.processBlock 行为一致，由调用方自行处理）。
 import crypto from 'node:crypto';
+// ⚠️ 不能用 `v instanceof ArrayBuffer` 判跨 realm：书源在 vm context 里 new 出来的
+//    ArrayBuffer 与本文件的 ArrayBuffer 不是同一个构造函数，instanceof 恒为 false，
+//    会掉到最后一行 `Buffer.from(String(v))` → 按字符串编码 → key/iv 字节数错 →
+//    "Unknown cipher"。用 toString tag 判才跨 realm 正确。
+const isArrayBuffer = (v) => Object.prototype.toString.call(v) === '[object ArrayBuffer]';
 const toBuf = (v) => {
+  if (v == null) return Buffer.alloc(0);
   if (Buffer.isBuffer(v)) return v;
-  if (v instanceof ArrayBuffer) return Buffer.from(new Uint8Array(v));
+  if (isArrayBuffer(v)) return Buffer.from(new Uint8Array(v));
   if (ArrayBuffer.isView(v)) return Buffer.from(v.buffer, v.byteOffset, v.byteLength);
+  // 兜底：带 buffer 的类数组视图（跨 realm 时 ArrayBuffer.isView 同样可能失效）
+  if (typeof v === 'object' && v.buffer) return Buffer.from(v.buffer);
   return Buffer.from(String(v), 'utf8');
 };
 const ecbCipher = (key, isEncode) => {
@@ -197,8 +205,39 @@ const Network = {
   },
 };
 
+/** sendMessage mock：语义对齐 lib/foundation/js_engine.dart 的 _messageReceiver
+ *  目前只实现 method='convert'（书源解密链路），其余方法报错提示未支持。
+ *  aes-cbc 走 CBCBlockCipher.processBlock —— 不去 PKCS#7 padding，由书源自己剥。 */
+const sendMessage = (msg) => {
+  if (!msg || msg.method !== 'convert') {
+    throw new Error(`tester: sendMessage 未实现该 method=${msg?.method}`);
+  }
+  if (msg.type === 'aes-cbc') {
+    const d = crypto.createDecipheriv(
+      `aes-${toBuf(msg.key).length * 8}-cbc`, toBuf(msg.key), toBuf(msg.iv));
+    d.setAutoPadding(false);
+    const out = Buffer.concat([d.update(toBuf(msg.value)), d.final()]);
+    // 返回 ArrayBuffer（对齐 Dart 侧 Uint8List → JS 侧 ArrayBuffer 的形态）
+    return Uint8Array.from(out).buffer;
+  }
+  if (msg.type === 'aes-ecb') {
+    const d = crypto.createDecipheriv(
+      `aes-${toBuf(msg.key).length * 8}-ecb`, toBuf(msg.key), null);
+    d.setAutoPadding(false);
+    return Uint8Array.from(Buffer.concat([d.update(toBuf(msg.value)), d.final()])).buffer;
+  }
+  if (msg.type === 'base64') {
+    return msg.isEncode ? Buffer.from(String(msg.value), 'utf8').toString('base64')
+      : Buffer.from(String(msg.value), 'base64');
+  }
+  if (msg.type === 'utf8') {
+    return msg.isEncode ? Buffer.from(String(msg.value), 'utf8') : toBuf(msg.value).toString('utf8');
+  }
+  throw new Error(`tester: sendMessage 未实现 convert type=${msg.type}`);
+};
+
 const ctx = {
-  ComicSource, Comic, ComicDetails, Comment, Network, Convert, randomInt,
+  ComicSource, Comic, ComicDetails, Comment, Network, Convert, randomInt, sendMessage,
   HtmlDocument: cheerio ? makeHtmlDocument : null,
   console,
   log: (...a) => console.log('[log]', ...a),
@@ -311,8 +350,11 @@ if (LIVE) {
 
     console.log('\n=== LIVE: 详情 + 章节 ===');
     if (typeof inst.comic?.loadInfo === 'function') {
-      // 多候选依次尝试（去重），直到某部漫画成功解析出章节
-      const candidates = [firstComic, searchFirst, exploreFirst].filter(c => c?.id != null);
+      // 多候选依次尝试（去重），直到某部漫画成功解析出章节。
+      // 顺序很重要：搜索结果优先（用户搜的就是这本），explore 只是兜底。
+      // 否则会出现「搜索 A 的词、却验了 explore 里另一本 B 的章节」，
+      // 源本身没问题也会误报 loadEp 失败。
+      const candidates = [searchFirst, firstComic, exploreFirst].filter(c => c?.id != null);
       const seen = new Set();
       let info = null, chosen = null;
       for (const c of candidates) {
@@ -329,6 +371,11 @@ if (LIVE) {
       if (!info) {
         check('comic.loadInfo', false, errStr(lastErr) || '所有候选漫画加载失败');
       } else {
+        // 配对铁律：chapters 来自哪本书，loadEp 就必须用那本书的 id。
+        // （历史 bug：firstEpId 取自候选 A 的 chapters，却拿候选 B 的 firstComic.id 去 loadEp，
+        //   必然 404/结构错。chosen 才是与 info 同源的漫画。）
+        const pairedComic = chosen || candidates[0] || firstComic;
+        firstComic = pairedComic;
         const ch = info.chapters;
         let groupCount = 0, chCount = 0;
         let isGroupMap = false;
@@ -359,12 +406,27 @@ if (LIVE) {
         check('comic.loadEp 返回图片列表', ep.images?.length > 0, `${ep.images?.length} 张`);
         if (ep.images?.length) {
           // 抽查第一张图片是否可下载（带 onImageLoad 头）
+          // onImageLoad 的返回值可能是 {img, headers} 或 {img, headers, imageUrl} 等形态，
+          // 原实现固定 fetch(ep.images[0]) 会绕过源做的图床改写，误判为不可下载。
           const cfg = typeof inst.comic.onImageLoad === 'function' ? (inst.comic.onImageLoad(ep.images[0], firstComic.id, firstEpId) || {}) : {};
+          const imgUrl = (typeof cfg === 'string' ? cfg : null)
+            || cfg.img || cfg.imageUrl || cfg.url || cfg.src || ep.images[0];
+          const hdrs = sanitizeHeaders(cfg.headers);
+          if (cfg.headers) {
+            console.log(`  onImageLoad 改写: ${String(ep.images[0]).slice(0, 60)} → ${String(imgUrl).slice(0, 60)}`);
+            console.log(`  onImageLoad 头: ${JSON.stringify(hdrs).slice(0, 160)}`);
+          }
           try {
-            const res = await fetch(ep.images[0], { headers: sanitizeHeaders(cfg.headers), signal: AbortSignal.timeout(15000) });
-            check('章节图片可下载', res.ok, `HTTP ${res.status} ${ep.images[0].slice(0, 70)}`);
+            const res = await fetch(imgUrl, { headers: hdrs, signal: AbortSignal.timeout(15000) });
+            let size = 0, magic = '';
+            try {
+              const b = Buffer.from(await res.arrayBuffer());
+              size = b.length; magic = b.slice(0, 6).toString('hex');
+            } catch { /* 忽略读体失败 */ }
+            check('章节图片可下载', res.ok && size > 1500,
+              `HTTP ${res.status} ${size}B magic=${magic} ${String(imgUrl).slice(0, 60)}`);
           } catch (e) {
-            check('章节图片可下载', false, `${errStr(e)} ${ep.images[0].slice(0, 70)}`);
+            check('章节图片可下载', false, `${errStr(e)} ${String(imgUrl).slice(0, 60)}`);
           }
         }
       } catch (e) { check('comic.loadEp', false, errStr(e)); }
