@@ -16,7 +16,7 @@
 class Mhua5 extends ComicSource {
   name = '漫画屋';
   key = 'mhua5';
-  version = '1.0.1';
+  version = '1.0.2';
   minAppVersion = '1.4.0';
   url = 'https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/mhua5.js';
 
@@ -38,6 +38,16 @@ class Mhua5 extends ComicSource {
 
   get(url) {
     return Network.get(this.abs(url), this.headers);
+  }
+
+  // 毫秒时间戳 → 本地时区 yyyy-MM-dd
+  // ⚠️ updateTime 必须是字符串：传数字（如 Date.now()）会让 App 抛
+  //    "type 'int' is not a subtype of type 'String?'" 并整页报错。
+  dstr(ts) {
+    let d = new Date(ts);
+    return new Date(ts - d.getTimezoneOffset() * 60000)
+      .toISOString()
+      .slice(0, 10);
   }
 
   // 从 HTML 提取漫画卡片。
@@ -231,9 +241,12 @@ class Mhua5 extends ComicSource {
         title: title || id,
         cover: cover,
         description: desc,
-        tags: { 分类: category, 作者: author },
+        tags: {
+          ...(category ? { 分类: [category] } : {}),
+          ...(author ? { 作者: [author] } : {}),
+        },
         chapters: chapters,
-        updateTime: Date.now(),
+        updateTime: this.dstr(Date.now()),
         maxPage: chapters.size,
       });
     },

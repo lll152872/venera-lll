@@ -29,7 +29,7 @@
 class Kubb extends ComicSource {
   name = '酷笔漫画';
   key = 'kubb';
-  version = '1.0.1';
+  version = '1.0.2';
   minAppVersion = '1.4.0';
   url = 'https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/kubb.js';
 
@@ -55,6 +55,16 @@ class Kubb extends ComicSource {
 
   get(url) {
     return Network.get(this.abs(url), this.headers);
+  }
+
+  // 毫秒时间戳 → 本地时区 yyyy-MM-dd
+  // ⚠️ updateTime 必须是字符串：传数字（如 Date.now()）会让 App 抛
+  //    "type 'int' is not a subtype of type 'String?'" 并整页报错。
+  dstr(ts) {
+    let d = new Date(ts);
+    return new Date(ts - d.getTimezoneOffset() * 60000)
+      .toISOString()
+      .slice(0, 10);
   }
 
   // 从分类/索引页提取漫画卡片：<a href="/byf/{slug}.html">…书名…</a>
@@ -297,9 +307,9 @@ class Kubb extends ComicSource {
       }
 
       let tags = {};
-      if (category && category !== '待分类') tags['分类'] = category;
-      if (author) tags['作者'] = author;
-      if (status) tags['状态'] = status;
+      if (category && category !== '待分类') tags['分类'] = [category];
+      if (author) tags['作者'] = [author];
+      if (status) tags['状态'] = [status];
 
       return new ComicDetails({
         title: title,
@@ -307,7 +317,7 @@ class Kubb extends ComicSource {
         description: desc,
         tags: tags,
         chapters: chapters,
-        updateTime: ts || Date.now(),
+        updateTime: ts ? this.dstr(ts) : '',
         maxPage: chapters.size,
       });
     },

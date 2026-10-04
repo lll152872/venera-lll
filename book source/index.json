@@ -4,69 +4,69 @@
     "key": "copy_manga",
     "fileName": "copy_manga.js",
     "version": "1.4.1",
-    "url": "https://ghproxy.net/https://raw.githubusercontent.com/lll152872/venera-lll/master/book%20source/copy_manga.js"
+    "url": "https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/copy_manga.js"
   },
   {
     "name": "包子漫画",
     "key": "baozi",
     "fileName": "baozi.js",
     "version": "1.2.0",
-    "url": "https://ghproxy.net/https://raw.githubusercontent.com/lll152872/venera-lll/master/book%20source/baozi.js"
+    "url": "https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/baozi.js"
   },
   {
     "name": "禁漫天堂",
     "key": "jm",
     "fileName": "jm.js",
     "version": "1.4.5",
-    "url": "https://ghproxy.net/https://raw.githubusercontent.com/lll152872/venera-lll/master/book%20source/jm.js"
+    "url": "https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/jm.js"
   },
   {
     "name": "hitomi.la",
     "key": "hitomi",
     "fileName": "hitomi.js",
     "version": "1.1.2",
-    "url": "https://ghproxy.net/https://raw.githubusercontent.com/lll152872/venera-lll/master/book%20source/hitomi.js"
+    "url": "https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/hitomi.js"
   },
   {
     "name": "漫蛙吧",
     "key": "manwaba",
     "fileName": "manwaba.js",
     "version": "1.4.0",
-    "url": "https://ghproxy.net/https://raw.githubusercontent.com/lll152872/venera-lll/master/book%20source/manwaba.js"
+    "url": "https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/manwaba.js"
   },
   {
     "name": "虫虫漫画",
     "key": "warchina",
     "fileName": "warchina.js",
     "version": "1.0.3",
-    "url": "https://ghproxy.net/https://raw.githubusercontent.com/lll152872/venera-lll/master/book%20source/warchina.js"
+    "url": "https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/warchina.js"
   },
   {
     "name": "漫画柜",
     "key": "ManHuaGui",
     "fileName": "manhuagui.js",
     "version": "1.2.1",
-    "url": "https://ghproxy.net/https://raw.githubusercontent.com/lll152872/venera-lll/master/book%20source/manhuagui.js"
+    "url": "https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/manhuagui.js"
   },
   {
     "name": "漫网",
     "key": "manwang",
     "fileName": "manwang.js",
     "version": "1.0.0",
-    "url": "https://ghproxy.net/https://raw.githubusercontent.com/lll152872/venera-lll/master/book%20source/manwang.js"
+    "url": "https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/manwang.js"
   },
   {
     "name": "漫画屋",
     "key": "mhua5",
     "fileName": "mhua5.js",
-    "version": "1.0.1",
-    "url": "https://ghproxy.net/https://raw.githubusercontent.com/lll152872/venera-lll/master/book%20source/mhua5.js"
+    "version": "1.0.2",
+    "url": "https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/mhua5.js"
   },
   {
     "name": "酷笔漫画",
     "key": "kubb",
     "fileName": "kubb.js",
-    "version": "1.0.1",
-    "url": "https://ghproxy.net/https://raw.githubusercontent.com/lll152872/venera-lll/master/book%20source/kubb.js"
+    "version": "1.0.2",
+    "url": "https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/kubb.js"
   }
 ]
