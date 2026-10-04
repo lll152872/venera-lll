@@ -1,5 +1,56 @@
 part of 'comic_source.dart';
 
+/// 书源由用户脚本提供，字段类型写错不应让整个 App 崩溃。
+/// 下面这组转换只做归一化，不改变正常数据的语义。
+String? _asStr(dynamic v) => v == null ? null : (v is String ? v : v.toString());
+
+String _asStrOr(dynamic v, String def) =>
+    v == null ? def : (v is String ? v : v.toString());
+
+int? _asInt(dynamic v) {
+  if (v == null) return null;
+  if (v is int) return v;
+  if (v is num) return v.toInt();
+  return int.tryParse(v.toString());
+}
+
+double? _asDouble(dynamic v) {
+  if (v == null) return null;
+  if (v is num) return v.toDouble();
+  return double.tryParse(v.toString());
+}
+
+List<String> _asStrList(dynamic v) {
+  if (v is! Iterable) return const [];
+  return v.map((e) => e.toString()).toList();
+}
+
+bool? _asBool(dynamic v) {
+  if (v == null) return null;
+  if (v is bool) return v;
+  if (v is num) return v != 0;
+  var s = v.toString().toLowerCase();
+  if (s == 'true' || s == '1') return true;
+  if (s == 'false' || s == '0') return false;
+  return null;
+}
+
+/// 时间字段容错：数字按秒/毫秒时间戳格式化为 `yyyy-MM-dd HH:mm:ss`，其余原样转字符串。
+String? _asTimeStr(dynamic v) {
+  if (v == null) return null;
+  if (v is String) return v;
+  if (v is num) {
+    var n = v.toInt();
+    if (n <= 0) return null;
+    return n < 10000000000
+        ? DateTime.fromMillisecondsSinceEpoch(
+            n * 1000,
+          ).toString().substring(0, 19)
+        : DateTime.fromMillisecondsSinceEpoch(n).toString().substring(0, 19);
+  }
+  return v.toString();
+}
+
 class Comment {
   final String userName;
   final String? avatar;
@@ -11,32 +62,18 @@ class Comment {
   final bool? isLiked;
   int? voteStatus; // 1: upvote, -1: downvote, 0: none
 
-  static String? parseTime(dynamic value) {
-    if (value == null) return null;
-    if (value is int) {
-      if (value < 10000000000) {
-        return DateTime.fromMillisecondsSinceEpoch(value * 1000)
-            .toString()
-            .substring(0, 19);
-      } else {
-        return DateTime.fromMillisecondsSinceEpoch(value)
-            .toString()
-            .substring(0, 19);
-      }
-    }
-    return value.toString();
-  }
+  static String? parseTime(dynamic value) => _asTimeStr(value);
 
   Comment.fromJson(Map<String, dynamic> json)
-      : userName = json["userName"],
-        avatar = json["avatar"],
-        content = json["content"],
-        time = parseTime(json["time"]),
-        replyCount = json["replyCount"],
-        id = json["id"].toString(),
-        score = json["score"],
-        isLiked = json["isLiked"],
-        voteStatus = json["voteStatus"];
+      : userName = _asStrOr(json["userName"], ""),
+        avatar = _asStr(json["avatar"]),
+        content = _asStrOr(json["content"], ""),
+        time = _asTimeStr(json["time"]),
+        replyCount = _asInt(json["replyCount"]),
+        id = json["id"]?.toString(),
+        score = _asInt(json["score"]),
+        isLiked = _asBool(json["isLiked"]),
+        voteStatus = _asInt(json["voteStatus"]);
 }
 
 class Comic {
@@ -92,16 +129,16 @@ class Comic {
   }
 
   Comic.fromJson(Map<String, dynamic> json, this.sourceKey)
-      : title = json["title"],
-        subtitle = json["subtitle"] ?? json["subTitle"] ?? "",
-        cover = json["cover"],
-        id = json["id"],
-        tags = List<String>.from(json["tags"] ?? []),
-        description = json["description"] ?? "",
-        maxPage = json["maxPage"],
-        language = json["language"],
-        favoriteId = json["favoriteId"],
-        stars = (json["stars"] as num?)?.toDouble();
+      : title = _asStrOr(json["title"], ""),
+        subtitle = _asStr(json["subtitle"]) ?? _asStr(json["subTitle"]) ?? "",
+        cover = _asStrOr(json["cover"], ""),
+        id = _asStrOr(json["id"], ""),
+        tags = _asStrList(json["tags"]),
+        description = _asStrOr(json["description"], ""),
+        maxPage = _asInt(json["maxPage"]),
+        language = _asStr(json["language"]),
+        favoriteId = _asStr(json["favoriteId"]),
+        stars = _asDouble(json["stars"]);
 
   @override
   bool operator ==(Object other) {
@@ -186,43 +223,64 @@ class ComicDetails with HistoryMixin {
 
   final List<Comment>? comments;
 
-  static Map<String, List<String>> _generateMap(Map<dynamic, dynamic> map) {
+  static Map<String, List<String>> _generateMap(dynamic map) {
     var res = <String, List<String>>{};
+    if (map is! Map) return res;
     map.forEach((key, value) {
-      if (value is List) {
-        res[key] = List<String>.from(value);
+      if (key == null || value == null) return;
+      List<String> list = value is Iterable
+          ? value.map((e) => e.toString()).toList()
+          : [value.toString()];
+      list = list.where((e) => e.isNotEmpty).toList();
+      if (list.isNotEmpty) {
+        res[key.toString()] = list;
       }
     });
     return res;
   }
 
   ComicDetails.fromJson(Map<String, dynamic> json)
-      : title = json["title"],
-        subTitle = json["subtitle"],
-        cover = json["cover"],
-        description = json["description"],
+      : title = _asStrOr(json["title"], ""),
+        subTitle = _asStr(json["subtitle"]),
+        cover = _asStrOr(json["cover"], ""),
+        description = _asStr(json["description"]),
         tags = _generateMap(json["tags"]),
         chapters = ComicChapters.fromJsonOrNull(json["chapters"]),
-        sourceKey = json["sourceKey"],
-        comicId = json["comicId"],
-        thumbnails = ListOrNull.from(json["thumbnails"]),
-        recommend = (json["recommend"] as List?)
-            ?.map((e) => Comic.fromJson(e, json["sourceKey"]))
-            .toList(),
-        isFavorite = json["isFavorite"],
-        subId = json["subId"],
-        likesCount = json["likesCount"],
-        isLiked = json["isLiked"],
-        commentCount = json["commentCount"],
-        uploader = json["uploader"],
-        uploadTime = json["uploadTime"],
-        updateTime = json["updateTime"],
-        url = json["url"],
-        stars = (json["stars"] as num?)?.toDouble(),
-        maxPage = json["maxPage"],
-        comments = (json["comments"] as List?)
-            ?.map((e) => Comment.fromJson(e))
-            .toList();
+        sourceKey = _asStrOr(json["sourceKey"], ""),
+        comicId = _asStrOr(json["comicId"], ""),
+        thumbnails = json["thumbnails"] is Iterable
+            ? (json["thumbnails"] as Iterable)
+                  .map((e) => e.toString())
+                  .toList()
+            : null,
+        recommend = json["recommend"] is Iterable
+            ? (json["recommend"] as Iterable)
+                  .whereType<Map>()
+                  .map(
+                    (e) => Comic.fromJson(
+                      Map<String, dynamic>.from(e),
+                      _asStrOr(json["sourceKey"], ""),
+                    ),
+                  )
+                  .toList()
+            : null,
+        isFavorite = _asBool(json["isFavorite"]),
+        subId = _asStr(json["subId"]),
+        likesCount = _asInt(json["likesCount"]),
+        isLiked = _asBool(json["isLiked"]),
+        commentCount = _asInt(json["commentCount"]),
+        uploader = _asStr(json["uploader"]),
+        uploadTime = _asTimeStr(json["uploadTime"]),
+        updateTime = _asTimeStr(json["updateTime"]),
+        url = _asStr(json["url"]),
+        stars = _asDouble(json["stars"]),
+        maxPage = _asInt(json["maxPage"]),
+        comments = json["comments"] is Iterable
+            ? (json["comments"] as Iterable)
+                  .whereType<Map>()
+                  .map((e) => Comment.fromJson(Map<String, dynamic>.from(e)))
+                  .toList()
+            : null;
 
   Map<String, dynamic> toJson() {
     return {
@@ -354,7 +412,12 @@ class ComicChapters {
       var value = entry.value;
       if (key is! String) throw ArgumentError("Invalid key type");
       if (value is Map) {
-        groupedChapters[key] = Map.from(value);
+        var m = <String, String>{};
+        value.forEach((k, v) {
+          if (k == null || v == null) return;
+          m[k.toString()] = v.toString();
+        });
+        groupedChapters[key] = m;
       } else {
         chapters[key] = value.toString();
       }

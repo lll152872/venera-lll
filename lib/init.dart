@@ -99,9 +99,15 @@ void _checkOldConfigs() {
     appdata.writeImplicitData();
   }
 
-  if (appdata.settings['comicSourceListUrl'].toString().contains("git.nyne.dev")) {
-    // migrate to jsdelivr cdn
-    appdata.settings['comicSourceListUrl'] = "https://cdn.jsdelivr.net/gh/venera-app/venera-configs@main/index.json";
+  // 迁移更新源地址：
+  //  - git.nyne.dev 是上游更早期用过的地址
+  //  - venera-app/venera-configs 是上游官方源库，本 fork 的自有源不在其中，
+  //    留在官方地址会导致「检查更新」永远返回没有更新
+  var listUrl = appdata.settings['comicSourceListUrl'].toString();
+  const upstreamListUrl =
+      "https://cdn.jsdelivr.net/gh/venera-app/venera-configs@main/index.json";
+  if (listUrl.contains("git.nyne.dev") || listUrl == upstreamListUrl) {
+    appdata.settings['comicSourceListUrl'] = defaultSourceListUrl;
     appdata.saveData();
   }
 }

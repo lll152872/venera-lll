@@ -291,7 +291,7 @@ class Settings with ChangeNotifier {
     'customImageProcessing': defaultCustomImageProcessing,
     'sni': true,
     'autoAddLanguageFilter': 'none', // none, chinese, english, japanese
-    'comicSourceListUrl': _defaultSourceListUrl,
+    'comicSourceListUrl': defaultSourceListUrl,
     'preloadImageCount': 4,
     'followUpdatesFolder': null,
     'followUpdatesFolders': <String>[],
@@ -444,5 +444,8 @@ async function processImage(image, cid, eid, page, sourceKey) {
 }
 ''';
 
-const _defaultSourceListUrl =
-    "https://cdn.jsdelivr.net/gh/venera-app/venera-configs@main/index.json";
+/// 默认的书源仓库索引地址。
+/// 本 fork 使用自有源库，上游官方库（venera-app/venera-configs）里没有本
+/// fork 的源，若沿用官方地址会导致「检查更新」永远返回没有更新。
+const defaultSourceListUrl =
+    "https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/index.json";
