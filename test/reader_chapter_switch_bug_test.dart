@@ -281,13 +281,6 @@ Future<void> _switchToChapter(WidgetTester tester, _Harness h, int c) async {
   await tester.pump();
 }
 
-/// 用页面高度表推出"单页高度"（解码完成后的稳定值）。
-double _pageHeightOf(_Harness h) {
-  final heights = h.state.testPageHeights.values.where((v) => v > 0).toList();
-  if (heights.isEmpty) return 600; // 未解码：占位高度
-  return heights.reduce((a, b) => a + b) / heights.length;
-}
-
 // ─────────────────────────────────────────────────────────────────────────
 // A. SplicedChapters 纯逻辑
 // ─────────────────────────────────────────────────────────────────────────
