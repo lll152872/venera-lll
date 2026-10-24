@@ -137,3 +137,19 @@ Remove-Item D:\mycode\venera\windows\flutter\ephemeral -Recurse -Force
    - `_prependPrevChapter` 的 setState → build 阶段延迟 postFrame（doSplice 模式）
    - `_appendNextChapter` 的 setState → 同上；**否则 `markAppending(false)` 不执行，appendingNext 永久卡 true，向下拼接中途停止**（实测停在 ch27）
    - **教训：所有在滚动 listener 链路里可能同步执行的 setState 都要加 `schedulerPhase==persistentCallbacks` 保护**。
+
+---
+
+## 六、已知失败用例（2026-10-24 实测，改代码前先看这条）
+
+`test/reader_continuous_scroll_test.dart` 里这 2 个用例**在 master 基线上就是红的**，
+不是新改动引入的（对照方法：`git stash push -- lib/` 跑一遍基线，再 `git stash pop` 恢复）：
+
+1. `prepend: ImageSizeCache-hit pages still compensate on load (no missed compensation)`
+2. `prepend: zone compensation keeps the viewport stable when prepended pages finish loading`
+
+失败形态一致：测试结束时抛 **"A Timer is still pending even after the widget tree was disposed"**，
+栈顶是 `ContinuousModeState.delayedSetIsScrolling`（images.dart 里那个 300ms 的
+"延迟把 isScrolling 置 false" 定时器）—— 测试没把 fake clock 推到定时器到期就结束了。
+
+排查时先跑基线对照，别把这 2 个红当成自己改坏的。

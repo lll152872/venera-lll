@@ -93,6 +93,12 @@ class CustomSlider extends StatefulWidget {
 class _CustomSliderState extends State<CustomSlider> {
   late double value;
 
+  /// 用户是否正在交互（按下 / 拖动中）。
+  ///
+  /// 交互期间以本地值为准：父组件回传的值可能还没更新（阅读器走的是
+  /// 「乐观更新 + 动画落点校正」链路），直接覆盖会让滑块圆点往回跳。
+  bool _interacting = false;
+
   @override
   void initState() {
     super.initState();
@@ -102,11 +108,35 @@ class _CustomSliderState extends State<CustomSlider> {
   @override
   void didUpdateWidget(CustomSlider oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.value != oldWidget.value) {
+    if (!_interacting && widget.value != oldWidget.value) {
       setState(() {
         value = widget.value;
       });
     }
+  }
+
+  /// 把指针横坐标换算成滑块值并回调（点击 / 拖动共用同一条换算路径）。
+  ///
+  /// 换算规则与 [CustomSlider.divisions] 对齐：轨道等分成 divisions 段，
+  /// 每段对应 (max - min) / divisions 的值；指针移出轨道按边界夹取。
+  void _emitFromDx(double dx, double trackWidth) {
+    if (widget.reversed) {
+      dx = trackWidth - dx;
+    }
+    if (dx < 0) dx = 0;
+    if (dx > trackWidth) dx = trackWidth;
+    final gap = trackWidth / widget.divisions;
+    final gapValue = (widget.max - widget.min) / widget.divisions;
+    var v = (dx / gap).round() * gapValue + widget.min;
+    if (v < widget.min) v = widget.min;
+    if (v > widget.max) v = widget.max;
+    // 本地立即更新：圆点跟手，不等父组件重建
+    if (v != value) {
+      setState(() {
+        value = v;
+      });
+    }
+    widget.onChanged.call(v);
   }
 
   @override
@@ -120,24 +150,30 @@ class _CustomSliderState extends State<CustomSlider> {
           cursor: SystemMouseCursors.click,
           child: GestureDetector(
             behavior: HitTestBehavior.translucent,
-            onTapDown: (details){
-              var dx = details.localPosition.dx;
-              if(widget.reversed){
-                dx = constraints.maxWidth - dx;
-              }
-              var gap = constraints.maxWidth / widget.divisions;
-              var gapValue = (widget.max - widget.min)  / widget.divisions;
-              widget.onChanged.call((dx / gap).round() * gapValue + widget.min);
+            onTapDown: (details) {
+              _interacting = true;
+              _emitFromDx(details.localPosition.dx, constraints.maxWidth);
             },
-            onVerticalDragUpdate: (details){
-              var dx = details.localPosition.dx;
-              if(dx > constraints.maxWidth || dx < 0)  return;
-              if(widget.reversed){
-                dx = constraints.maxWidth - dx;
-              }
-              var gap = constraints.maxWidth / widget.divisions;
-              var gapValue = (widget.max - widget.min)  / widget.divisions;
-              widget.onChanged.call((dx / gap).round() * gapValue + widget.min);
+            onTapUp: (_) {
+              _interacting = false;
+            },
+            onTapCancel: () {
+              _interacting = false;
+            },
+            // pan 而不是 verticalDrag：桌面端是横向拖动滑块，
+            // 原来只有 onVerticalDragUpdate → 横向拖动完全没反应。
+            onPanStart: (details) {
+              _interacting = true;
+              _emitFromDx(details.localPosition.dx, constraints.maxWidth);
+            },
+            onPanUpdate: (details) {
+              _emitFromDx(details.localPosition.dx, constraints.maxWidth);
+            },
+            onPanEnd: (_) {
+              _interacting = false;
+            },
+            onPanCancel: () {
+              _interacting = false;
             },
             child: SizedBox(
               height: 24,

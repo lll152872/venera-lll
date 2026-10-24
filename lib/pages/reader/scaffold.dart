@@ -596,6 +596,10 @@ class _ReaderScaffoldState extends State<_ReaderScaffold> {
       reversed: isReversed,
       divisions: (context.reader.maxPage - 1).clamp(2, 1 << 16),
       onChanged: (i) {
+        context.reader.dbg(
+          '[DBG] bottom slider onChanged -> toPage(${i.toInt()}) '
+          '(cur=${context.reader.page} maxPage=${context.reader.maxPage})',
+        );
         context.reader.toPage(i.toInt());
       },
     );

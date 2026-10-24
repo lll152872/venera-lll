@@ -170,6 +170,16 @@ flutter build windows --release --no-pub
     -c "import urllib.request; urllib.request.urlretrieve('https://dist.nuget.org/win-x86-commandline/v6.0.0/nuget.exe','D:/edge/nuget.exe')"
   ```
 - 已放到 `D:\edge\nuget.exe`（7,034,784 字节），并**持久加入 User PATH**（`D:\edge`）。
+- ⚠️ **2026-10-24 实测补记**：`D:\edge\nuget.exe` 会被清理掉（目录里只剩用户文件），而
+  `build/windows/x64/plugins/flutter_inappwebview_windows/flutter_inappwebview_windows_DEPS.vcxproj`
+  里**硬编码**了 `D:\edge\nuget.exe`（cmake configure 时 `find_program` 找到的绝对路径）。
+  → 症状：构建在 inappwebview 插件的 DEPS 步骤报 `MSB3073 ... 已退出，代码为 9009`（9009 = 命令找不到）。
+  → 修复（不用重新 configure，SDK 自带一份）：
+  ```bash
+  cp /d/flutter_3.44.0/bin/nuget.exe /d/edge/nuget.exe
+  ```
+  → nuget 包本体缓存在 `%USERPROFILE%\.nuget\packages`（webview2 / cppwinrt /
+  implementationlibrary / nlohmann.json 都在），所以离线也能过。
 - 有了它，`flutter_inappwebview_windows` 等插件的 `nuget install` 走全局缓存离线成功（`%USERPROFILE%\.nuget\packages` 里已缓存 `microsoft.windows.implementationlibrary` / `cppwinrt` / `webview2` / `nlohmann.json` 等所需版本）。
 
 ### 6.2 `local_auth_windows` 的 CMakeLists 已打离线补丁（pub.dev 缓存）

@@ -113,6 +113,9 @@ class _ReaderState extends State<Reader>
     implements ReaderView {
   @override
   void update() {
+    // 动画回调可能在页面已销毁后才到（关闭阅读器 / 跳章），此时 setState 会抛
+    // "setState() called after dispose"。
+    if (!mounted) return;
     setState(() {});
   }
 
@@ -692,7 +695,14 @@ abstract mixin class _ReaderLocation {
   void setPage(int page) {
     // Prevent page change during animation
     if (_animationCount > 0 && _pendingPage != null && page != _pendingPage) {
+      _dbg(
+        '[DBG] setPage BLOCKED by animation guard: incoming=$page '
+        'pending=$_pendingPage animCount=$_animationCount cur=$_page',
+      );
       return;
+    }
+    if (page != _page) {
+      _dbg('[DBG] setPage applied: $_page -> $page (pending=$_pendingPage)');
     }
     this.page = page;
   }
@@ -720,15 +730,27 @@ abstract mixin class _ReaderLocation {
       }
       final hasAnimation = enablePageAnimation(cid, type);
       if (hasAnimation) {
+        final prevPage = this.page;
         _pendingPage = page;
         _animationCount++;
+        // 立即把 page 设为目标页。
+        //
+        // 动画期间视图会回传一串中间页，这些都被 [setPage] 的守卫丢弃
+        // （动画未结束、页码不等于 _pendingPage），所以在动画真正落定前
+        // reader.page 一直停在旧值 —— 底栏页码和进度条滑块因此完全不动
+        // （「点了会跳转，但页码和滑块不动」）。这里先乐观更新，UI 立刻跟随
+        // 用户操作，动画结束后再由 [syncCurrentPage] 按实际落点校正。
+        this.page = page;
         update();
-        _imageViewController!.animateToPage(page).then((_) {
-          _animationCount--;
-          if (_pendingPage == page) {
-            _pendingPage = null;
-          }
-          update();
+        _dbg(
+          '[DBG] toPage animated target=$page prev=$prevPage maxPage=$maxPage '
+          'totalPages=$totalPages animCount=$_animationCount',
+        );
+        _imageViewController!.animateToPage(page).then<void>((_) {
+          _finishAnimatedJump(page);
+        }, onError: (Object e, StackTrace st) {
+          _dbg('[DBG] animateToPage($page) failed: $e');
+          _finishAnimatedJump(page);
         });
       } else {
         this.page = page;
@@ -738,6 +760,25 @@ abstract mixin class _ReaderLocation {
       return true;
     }
     return false;
+  }
+
+  /// 动画跳转的收尾：解除动画守卫 + 按视图实际落点校正页码。
+  ///
+  /// 必须成对调用 [_animationCount] 的加减：动画失败（目标位置越界等）
+  /// 也要走这里，否则动画计数永远停在 >0，之后所有页码更新都被
+  /// [setPage] 的守卫丢弃（页码和滑块从此不再变化）。
+  void _finishAnimatedJump(int page) {
+    _animationCount--;
+    final isCurrent = _pendingPage == page;
+    if (isCurrent) {
+      _pendingPage = null;
+    }
+    update();
+    // 只有「最后一次跳转」才校正落点。被后续跳转取代的旧动画不校正，
+    // 否则拖动进度条时每一步都会被拉回实际视口位置，页码来回乱跳。
+    if (isCurrent) {
+      _imageViewController?.syncCurrentPage();
+    }
   }
 
   bool get isPageAnimating => _animationCount > 0;
@@ -904,6 +945,13 @@ abstract interface class _ImageViewController {
   void toPage(int page);
 
   Future<void> animateToPage(int page);
+
+  /// 把 reader.page 对齐到视图的实际落点。
+  ///
+  /// 跳转偏移是按页面高度估算的（连续滚动里未加载的页用占位高度），
+  /// 落点可能和请求的页差一两页；动画结束后调用一次，保证底栏页码和
+  /// 进度条滑块显示的是用户真正看到的那一页。
+  void syncCurrentPage();
 
   void handleDoubleTap(Offset location);
 

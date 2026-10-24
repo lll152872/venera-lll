@@ -463,6 +463,19 @@ class _GalleryModeState extends State<_GalleryMode>
   }
 
   @override
+  void syncCurrentPage() {
+    if (!mounted) return;
+    // 图库模式：PhotoViewGallery 的 onPageChanged 已经同步过页码，
+    // 这里兜底 —— 动画结束后按 controller 的真实位置再对齐一次。
+    final i = controller.page?.round();
+    // 章节评论页等特殊页不参与（索引超出图片页范围）。
+    if (i == null || i < 1 || i > reader.maxPage) return;
+    if (i == reader.page) return;
+    reader.setPage(i);
+    context.readerScaffold.update();
+  }
+
+  @override
   void handleDoubleTap(Offset location) {
     if (appdata.settings['quickCollectImage'] == 'DoubleTap') {
       context.readerScaffold.addImageFavorite();
@@ -1167,6 +1180,10 @@ class ContinuousModeState extends State<ContinuousMode>
     // chapter 切换（不受动画守卫保护）生效而 setPage 被动画守卫丢弃时，
     // 旧章的大 page 可能残留到新章，clamp 兜底。
     if (!reader.isLoading && reader.page != localPage) {
+      reader.dbg(
+        '[DBG] _updateReaderStateForSpliced setPage -> $localPage '
+        '(cur=${reader.page} gp=$globalPage chap=$chap)',
+      );
       reader.setPage(localPage.clamp(1, chapLen));
       // prepend 场景：向上拼接时列表头部插入 + jumpTo 补偿，scroll listener
       // 可能在 build 中触发（_ItemContextRegistrar build 期间 _syncReaderState
@@ -1648,7 +1665,7 @@ class ContinuousModeState extends State<ContinuousMode>
         );
   }
 
-  void _syncReaderState() {
+  void _syncReaderState({bool force = false}) {
     if (_placeholderPageHeight <= 0) return;
     // 页码由 item 实际渲染位置决定（_currentPageFromViewport），
     // 不再依赖 _pageHeights 像素累加反算——彻底消除异步高度变化导致的页码错位。
@@ -1659,8 +1676,11 @@ class ContinuousModeState extends State<ContinuousMode>
     // 注意：prependingPrev 不豁免——_shiftIndices 已平移 _lastSyncedGp(+n)，
     // 平移后突变≈0；若豁免，postFrame jumpTo 的过渡帧会把布局未更新时的
     // 错误 gp(旧布局反算)写入 _lastSyncedGp，污染后续所有同步/append 判断。
+    // force=true 时跳过拦截：用户显式跳转（点进度条）后校正落点，
+    // gp 大幅变化是预期的，不能当抖动丢掉。
     const int kGpJumpReject = 15;
-    if (_lastSyncedGp >= 0 &&
+    if (!force &&
+        _lastSyncedGp >= 0 &&
         (gp - _lastSyncedGp).abs() > kGpJumpReject &&
         !_spliced.appendingNext) {
       reader.dbg('[DBG] _syncReaderState GP REJECTED gp=$gp last=$_lastSyncedGp delta=${gp - _lastSyncedGp}');
@@ -2061,6 +2081,26 @@ class ContinuousModeState extends State<ContinuousMode>
     int gp = _spliced.globalGpForChapterPage(reader.chapter, page);
     _scrollController.jumpTo(_offsetForGp(gp));
     _futurePosition = null;
+  }
+
+  @override
+  void syncCurrentPage() {
+    if (!mounted) return;
+    // 跳转偏移是按页面高度估算的（未加载的页用占位高度），落点可能和
+    // 请求的页差一两页。动画结束后强制同步一次，让底栏页码和进度条
+    // 滑块显示用户真正看到的那一页。
+    //
+    // force=true 绕过「gp 突变硬拦截」：这是用户显式跳转的落点校正，
+    // 不是滚动抖动，gp 大幅变化是预期的。
+    reader.dbg(
+      '[DBG] syncCurrentPage (continuous) ENTER page=${reader.page} '
+      'gp=$_lastSyncedGp',
+    );
+    _syncReaderState(force: true);
+    reader.dbg(
+      '[DBG] syncCurrentPage (continuous) EXIT page=${reader.page} '
+      'gp=$_lastSyncedGp',
+    );
   }
 
   @override
