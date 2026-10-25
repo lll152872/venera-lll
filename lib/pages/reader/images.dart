@@ -782,9 +782,30 @@ class _SplicedPageDelegate extends SliverChildBuilderDelegate {
     super.builder, {
     required this.version,
     required super.childCount,
+    required this.totalExtent,
   }) : super(addSemanticIndexes: false);
 
   final int version;
+
+  /// 整个拼接列表的总长度（所有页高度之和）的取值函数。
+  ///
+  /// 为什么必须覆写：默认实现按「已布局 item 的平均 extent × item 总数」
+  /// 外推总长。连续滚动的页高差异极大（短横页 ~423px、长条页 ~3382px、
+  /// 占位高 1208px），平均外推出来的总长能差几千像素，而 `jumpTo` 会被
+  /// clamp 到这个偏小的 `maxScrollExtent` —— 跳转直接落不到目标页
+  /// （"点第 30 页落到第 17 页"）。覆写成「逐页累加已知高度」后，
+  /// clamp 不再吞掉跳转。
+  final double Function() totalExtent;
+
+  @override
+  double? estimateMaxScrollOffset(
+    int firstIndex,
+    int lastIndex,
+    double leadingScrollOffset,
+    double trailingScrollOffset,
+  ) {
+    return totalExtent();
+  }
 
   @override
   bool shouldRebuild(covariant _SplicedPageDelegate oldDelegate) =>
@@ -957,6 +978,49 @@ class ContinuousModeState extends State<ContinuousMode>
   final Map<int, double> _pageHeights = {};
   double _placeholderPageHeight = 0; // 首帧占位（build 时赋视口高）
 
+  /// ── 图片尺寸探测（读文件头拿真实宽高）──
+  ///
+  /// 连续滚动里每页高度 = 图片高宽比 × 显示宽，跳转偏移是逐页累加高度算
+  /// 出来的。图片没解码前只能用「视口高」占位（1208px），而真实页高从
+  /// 423px（短横页）到 3382px（长条页）都有 → 占位值会让「点第 N 页」落在
+  /// N±13 页。宽高就写在图片文件头里，读前 64KB 就能拿到（不解码整图、
+  /// 不下载整图），探测一次跳转就准了。
+  ///
+  /// 正在探测中的 key（防同一页被重复探测）。
+  final Set<String> _probingKeys = {};
+
+  /// 探测失败过的 key（本会话内不再重试）。
+  ///
+  /// 必须记：失败的页不会进 [ImageSizeCache] → 下一轮排队时又会被选中
+  /// → 整章探测失败时会陷入「探一轮→再排一轮」的死循环，把图床打爆。
+  final Set<String> _probeFailed = {};
+
+  /// 探测队列是否在跑（避免多轮探测叠加）。
+  bool _probing = false;
+
+  /// 书源自定义请求头（Referer 等），探测请求复用。
+  Map<String, dynamic>? _probeHeaders;
+
+  /// 书源请求头是否已取过（只取一次）。
+  bool _probeHeadersLoaded = false;
+
+  /// 探测并发数。与图片下载并发 [_kMaxConcurrentDownloads] 同量级：
+  /// 既不给服务器压力，也不至于让整章探测拖太久。
+  static const int _kProbeConcurrency = 3;
+
+  /// 单轮探测的页数上限。拼接列表最多 3 章，超长章节一次全探会给图床
+  /// 打太多请求（每页一次 Range 请求）；超出的部分下一轮接着探。
+  static const int _kProbeBatchLimit = 150;
+
+  /// 跳转落点校正的最大轮数（每轮一帧）。
+  static const int _kAlignMaxRounds = 3;
+
+  /// 正在做落点校正的目标 gp（新的跳转会取代它）。
+  int? _alignTargetGp;
+
+  /// 落点校正已用轮数。
+  int _alignRound = 0;
+
   /// 向上无缝回滚:prepend 新插页的 index 集合(1-based,无条件全加)。
   /// 这些页布局高从占位高变为真实高时(图片加载),必须补偿一次滚动 offset,
   /// 否则顶部内容变矮会把下方已读内容上拉(视觉跳页)。
@@ -1116,6 +1180,9 @@ class ContinuousModeState extends State<ContinuousMode>
     // （"点了下一章没反应/图片不加载"）。版本号变化让 ListView 换 key 整体
     // 重建一次；滚动位置由外部持有的 _scrollController 保存，不受影响。
     _spliceVersion++;
+    // 后台探测本页各页的真实像素尺寸（读文件头，不解码整图）。
+    // 探测结果回填 _pageHeights 后，跳转偏移就不再依赖占位高。
+    _scheduleSizeProbe();
   }
 
   /// prepend 后一次性集中平移所有按 index 索引的结构(向上无缝回滚核心)。
@@ -1248,6 +1315,8 @@ class ContinuousModeState extends State<ContinuousMode>
         reader.dbg('[DBG] _appendNextChapter AFTER splice itemCount=${_spliced.length} offsets=${_spliced._offsets}');
       });
       _spliced.markAppending(false);
+      // 新拼进来的页也要探测尺寸（否则它们的页高仍是占位高）。
+      _scheduleSizeProbe();
     }
     if (SchedulerBinding.instance.schedulerPhase ==
         SchedulerPhase.persistentCallbacks) {
@@ -1351,6 +1420,8 @@ class ContinuousModeState extends State<ContinuousMode>
         _scrollController.jumpTo(_scrollController.offset + estDelta);
       }
       _spliced.markPrepending(false);
+      // 新拼进来的页也要探测尺寸（否则它们的页高仍是占位高）。
+      _scheduleSizeProbe();
     });
     _prefetchChapter(prev - 1); // 反向预取更前一章(保持无缝)
     _growCache(_spliced.length + kCacheGrowthPadding);
@@ -1428,6 +1499,32 @@ class ContinuousModeState extends State<ContinuousMode>
     // 起始端坐标：垂直=top(dy)，水平非 reverse=left(dx)，水平 reverse=right(dx)。
     // 找「沿滚动轴最靠前的可见 item」= 起始端坐标最小的 item。
     double bestEdge = double.infinity;
+    // 视口在滚动轴「起始端」内缩 0.5px：恰好停在视口边的那一页
+    // （浮点误差下可能只擦到 1e-13）不算可见。否则跳转到第 N 页时，
+    // 第 N-1 页会因为「擦边」被判成可见、起始边又更小 → 页码显示 N-1。
+    Rect? visibleRect;
+    if (viewportRect != null) {
+      visibleRect = horizontal
+          ? (reverse
+              ? Rect.fromLTRB(
+                  viewportRect.left,
+                  viewportRect.top,
+                  viewportRect.right - 0.5,
+                  viewportRect.bottom,
+                )
+              : Rect.fromLTRB(
+                  viewportRect.left + 0.5,
+                  viewportRect.top,
+                  viewportRect.right,
+                  viewportRect.bottom,
+                ))
+          : Rect.fromLTRB(
+              viewportRect.left,
+              viewportRect.top + 0.5,
+              viewportRect.right,
+              viewportRect.bottom,
+            );
+    }
     _itemContexts.forEach((index, ctx) {
       if (!ctx.mounted) return;
       final ro = ctx.findRenderObject();
@@ -1436,9 +1533,9 @@ class ContinuousModeState extends State<ContinuousMode>
       // 只判 attached 会走到 ro.size 抛 "RenderBox was not laid out"。
       if (ro is! RenderBox || !ro.attached || !ro.hasSize) return;
       // 只考虑与视口有交集的 item；视口外缓存区 item 直接跳过
-      if (viewportRect != null) {
+      if (visibleRect != null) {
         final itemRect = ro.localToGlobal(Offset.zero) & ro.size;
-        if (!itemRect.overlaps(viewportRect)) return;
+        if (!itemRect.overlaps(visibleRect)) return;
       }
       final double edge = horizontal
           ? (reverse
@@ -1477,6 +1574,32 @@ class ContinuousModeState extends State<ContinuousMode>
   @visibleForTesting
   Map<int, double> get testPageHeights => _pageHeights;
 
+  /// 用 [ImageSizeCache] 里已知的像素尺寸回填 [_pageHeights]。
+  ///
+  /// 只回填「还没被渲染出来」的页——这是保持「估算基准 == 真实布局」的
+  /// 关键：跳转偏移 = Σ [_pageHeights]，而落点由各 item 的**实际布局高度**
+  /// 决定，两者必须逐页相等。
+  ///
+  /// 为什么需要单独一份：[_resetSplicedState] 里也有同样的回填，但那里
+  /// `_layoutCrossAxis` 可能还是 0（首次进入阅读器、build 还没跑过）→
+  /// 算不出显示高度 → 回填被跳过。build 里补一次，首帧就能用上真实页高。
+  void _syncPageHeightsFromCache() {
+    if (_layoutCrossAxis <= 0) return;
+    for (var i = 0; i < _spliced.length; i++) {
+      final int gp = i + 1;
+      if (_pageHeights.containsKey(gp)) continue;
+      // 已经渲染出来的页不动：它的布局高度已是既成事实（见
+      // [_applyProbedSize] 的详细说明）。
+      if (_itemContexts.containsKey(gp)) continue;
+      final sz = ImageSizeCache.instance.get(_spliced[i]);
+      if (sz == null) continue;
+      _pageHeights[gp] = _computeAxisSize(
+        sz.width.toInt(),
+        sz.height.toInt(),
+      );
+    }
+  }
+
   /// 第 gp 页（1-based）的显示高度：从 _pageHeights 拿真实高，未加载回退占位。
   double _pageHeight(int gp) {
     return _pageHeights[gp] ?? _placeholderPageHeight;
@@ -1496,8 +1619,15 @@ class ContinuousModeState extends State<ContinuousMode>
 
   /// 第 gp 页起始处的像素偏移 = Σ_{i=1}^{gp-1} (pageHeight(i) + kPageSpacing)。
   /// 头尾占位 SizedBox（index 0 / length+1）不计入（它们高度为 0）。
-  /// 仅用于跳转估算（toPage/jumpTo），精度要求低——不准只影响跳转位置，
-  /// 跳转后 _syncReaderState 用 _currentPageFromViewport 自动校正页码。
+  ///
+  /// 这是跳转的**估算**基准：页高来自探测/解码/占位三种来源，异步到达会
+  /// 让估算和真实布局不一致 → 落点会偏。偏差由 [_alignToGp] 按真实布局
+  /// 位置二次校正（见该方法）。
+  ///
+  /// 注意：只对「正序」模式成立（垂直连续 / 从左到右）。从右到左
+  /// (continuousRightToLeft) 的滚动方向是反的，pixels 从右往左数，
+  /// 这里算的是 sliver 空间里的正向偏移，与 pixels 差一个总长 —— 该模式
+  /// 的跳转落点不在本次修复范围内。
   double _offsetForGp(int gp) {
     double off = 0;
     for (int i = 1; i < gp; i++) {
@@ -1505,6 +1635,294 @@ class ContinuousModeState extends State<ContinuousMode>
     }
     return off;
   }
+
+  /// 整个拼接列表的总长度 = Σ 所有页高度。
+  ///
+  /// 供 [_SplicedPageDelegate.estimateMaxScrollOffset] 用：默认的平均
+  /// 外推在页高差异大时会算出一个偏小的总长，`jumpTo` 被 clamp 后落不到
+  /// 目标页。
+  double _totalExtent() {
+    double total = 0;
+    for (int i = 1; i <= _spliced.length; i++) {
+      total += _pageHeight(i) + kPageSpacing;
+    }
+    return total;
+  }
+
+  // ── 图片尺寸探测 ──────────────────────────────────────────────
+
+  /// 后台探测当前拼接列表里所有页的真实像素尺寸。
+  ///
+  /// 探测结果写回 [ImageSizeCache]（跨会话持久化，下次开章直接命中），
+  /// 并回填 [_pageHeights] → 之后的跳转偏移自动变准。
+  ///
+  /// 不在跳转路径上同步等待：探测在后台跑（并发 [_kProbeConcurrency]），
+  /// UI 不卡；结果晚到也不会崩，回退占位高即可。
+  void _scheduleSizeProbe() {
+    if (!mounted || _probing) return;
+    final queue = <String>[];
+    for (var i = 0; i < _spliced.length; i++) {
+      final key = _spliced[i];
+      if (ImageSizeCache.instance.get(key) != null) continue;
+      if (_probingKeys.contains(key)) continue;
+      if (_probeFailed.contains(key)) continue;
+      queue.add(key);
+    }
+    if (queue.isEmpty) return;
+    _probing = true;
+    unawaited(
+      _runSizeProbe(
+        queue.length > _kProbeBatchLimit
+            ? queue.sublist(0, _kProbeBatchLimit)
+            : queue,
+      ),
+    );
+  }
+
+  Future<void> _runSizeProbe(List<String> queue) async {
+    // 书源自定义请求头（Referer 等）：有些图床必须带 Referer，否则探测
+    // 请求被拒 → 探测失败 → 回退占位高。一章只取一次。
+    final headers = await _loadProbeHeaders();
+    var next = 0;
+    Future<void> worker() async {
+      while (true) {
+        if (next >= queue.length) return;
+        final key = queue[next++];
+        _probingKeys.add(key);
+        Size? size;
+        try {
+          size = await ImageSizeProbe.probe(key, headers: headers);
+        } catch (e) {
+          Log.error("ImageSizeProbe", "probe $key failed: $e");
+        }
+        _probingKeys.remove(key);
+        if (size == null) {
+          // 失败不再重试（否则整章探测失败时会无限重排队，见 [_probeFailed]）。
+          _probeFailed.add(key);
+          continue;
+        }
+        ImageSizeCache.instance.put(
+          key,
+          size.width.round(),
+          size.height.round(),
+        );
+        _applyProbedSize(key, size);
+      }
+    }
+
+    try {
+      await Future.wait(
+        List.generate(_kProbeConcurrency, (_) => worker()),
+      );
+    } finally {
+      _probing = false;
+    }
+    // 单轮上限截断掉的页继续探下一批（_probing 已复位，这里能重新排队）。
+    _scheduleSizeProbe();
+  }
+
+  /// 取书源的自定义图片请求头（Referer 等）。取不到就返回 null（探测仍然
+  /// 发出，只是可能被图床拒绝）。
+  Future<Map<String, dynamic>?> _loadProbeHeaders() async {
+    if (_probeHeadersLoaded) return _probeHeaders;
+    _probeHeadersLoaded = true;
+    try {
+      final source = reader.type.comicSource;
+      if (source == null || _spliced.length == 0) return null;
+      final config = await source.getImageLoadingConfig?.call(
+        _spliced[0],
+        reader.cid,
+        _eidForPage(1),
+      );
+      final raw = config?['headers'];
+      if (raw is Map) {
+        _probeHeaders = <String, dynamic>{
+          for (final entry in raw.entries) entry.key.toString(): entry.value,
+        };
+      }
+    } catch (e) {
+      Log.error("ImageSizeProbe", "load image loading config failed: $e");
+    }
+    return _probeHeaders;
+  }
+
+  /// 把探测到的真实尺寸回填到 [_pageHeights]。
+  ///
+  /// **只回填「还没被渲染出来」的页**——这是保持「估算基准 == 真实布局」的
+  /// 关键：跳转偏移 = Σ [_pageHeights]，而落点由各 item 的**实际布局高度**
+  /// 决定。两者必须逐页相等，否则落点必然偏。
+  ///
+  /// - 该页还没 build → 回填后它被 build 时会用真实高布局（见
+  ///   [_buildSplicedItem] 的 placeholderHeight）→ 估算与布局同时变准 ✓
+  /// - 该页已经 build（正在用占位高/已解码高度）→ **不回填**：它的布局高度
+  ///   已经是既成事实，改估算只会让两者脱节。等图片解码完成时
+  ///   `onImageLoaded` 会同时更新布局和 [_pageHeights] ✓
+  ///
+  /// 因此这里不需要补偿滚动位置：被回填的页一定在视口下方（还没被
+  /// 渲染），改动不会造成可见位移。
+  void _applyProbedSize(String key, Size size) {
+    if (!mounted) return;
+    // 探测期间可能发生 prepend/append/切章 → 按 key 重新定位当前 gp，
+    // 不能用排队时记下的下标（会张冠李戴到别的页上）。
+    final int idx = _spliced.images.indexOf(key);
+    if (idx < 0) return;
+    final int gp = idx + 1;
+    // 已经渲染出来的页不动（见上文说明）。
+    if (_itemContexts.containsKey(gp)) return;
+    final double h = _computeAxisSize(size.width.round(), size.height.round());
+    final double old = _pageHeights[gp] ?? _placeholderPageHeight;
+    if ((old - h).abs() < 0.5) return;
+    void apply() {
+      if (!mounted) return;
+      setState(() {
+        _pageHeights[gp] = h;
+      });
+      reader.dbg(
+        '[DBG] probe apply gp=$gp h=$h (was $old) '
+        'offset=${_scrollController.hasClients ? _scrollController.offset : -1}',
+      );
+    }
+
+    // 探测回调可能落在 build 阶段（setState during build 会抛异常），
+    // 延迟一帧再改。
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => apply());
+    } else {
+      apply();
+    }
+  }
+
+  // ── 跳转落点校正 ──────────────────────────────────────────────
+
+  /// 跳到全局第 [gp] 页（1-based），并校正落点。
+  void _jumpToGp(int gp) {
+    if (!_scrollController.hasClients) return;
+    _futurePosition = null;
+    _scrollController.jumpTo(_offsetForGp(gp));
+    unawaited(_alignThenSync(gp));
+  }
+
+  /// 落点校正完成后强制同步一次页码。
+  ///
+  /// 必要性：跳转会触发 scroll listener → [_syncReaderState]，而它有
+  /// 「gp 突变 > 15 页就丢弃」的硬拦截——从第 1 页跳到第 30 页正好命中，
+  /// 页码会停在旧值（"内容跳了但页码不动"）。用户显式跳转后必须按实际
+  /// 落点强制同步一次（force=true 绕过该拦截）。
+  Future<void> _alignThenSync(int gp) async {
+    await _alignToGp(gp);
+    if (!mounted || !_scrollController.hasClients) return;
+    _syncReaderState(force: true);
+  }
+
+  /// 跳转后核对实际落点，偏差则按真实布局位置重新对齐。
+  ///
+  /// 为什么需要：跳转偏移是「逐页累加已知页高」算出来的估算值，而页高有
+  /// 三种来源（探测结果 / 图片解码 / 占位高），异步到达会让估算和真实
+  /// 布局对不上 → 落点偏几页到几十页。这里每轮按**真实渲染位置**核对，
+  /// 偏了就重新对齐，最终落点与估算无关。
+  ///
+  /// 最多 [_kAlignMaxRounds] 轮；期间被新的跳转取代则立即放弃（用户又点
+  /// 了进度条，别跟用户抢）。
+  Future<void> _alignToGp(int gp) async {
+    _alignTargetGp = gp;
+    _alignRound = 0;
+    for (var round = 0; round < _kAlignMaxRounds; round++) {
+      await _nextFrame();
+      if (!mounted || !_scrollController.hasClients) return;
+      if (_alignTargetGp != gp) return; // 已被新的跳转取代
+      final int landed = _currentPageFromViewport();
+      if (landed == gp) {
+        _alignTargetGp = null;
+        return;
+      }
+      _alignRound = round + 1;
+      final bool moved = _alignByRenderBox(gp) || _alignByEstimate(gp, landed);
+      reader.dbg(
+        '[DBG] align round=$_alignRound gp=$gp landed=$landed moved=$moved',
+      );
+      if (!moved) {
+        _alignTargetGp = null;
+        return;
+      }
+    }
+    reader.dbg('[DBG] align give up gp=$gp');
+    _alignTargetGp = null;
+  }
+
+  /// 等下一帧布局完成（确保 jumpTo 之后的新布局已经落地）。
+  Future<void> _nextFrame() {
+    final completer = Completer<void>();
+    WidgetsBinding.instance.addPostFrameCallback((_) => completer.complete());
+    // 没有待处理帧时 postFrameCallback 不会触发，主动排一帧。
+    WidgetsBinding.instance.scheduleFrame();
+    return completer.future;
+  }
+
+  /// 对齐方式一（最准）：目标页已经在渲染树里 → 直接用它的真实布局位置
+  /// 把它的起始边对齐到视口起始边。
+  bool _alignByRenderBox(int gp) {
+    final ctx = _itemContexts[gp];
+    if (ctx == null || !ctx.mounted) return false;
+    final ro = ctx.findRenderObject();
+    final listRo = _listKey.currentContext?.findRenderObject();
+    if (ro is! RenderBox || !ro.attached || !ro.hasSize) return false;
+    if (listRo is! RenderBox || !listRo.attached || !listRo.hasSize) {
+      return false;
+    }
+    final double delta = _leadingEdge(ro) - _leadingEdge(listRo);
+    if (delta.abs() < 0.5) return true;
+    _scrollController.jumpTo(_scrollController.offset + delta);
+    return true;
+  }
+
+  /// 对齐方式二（兜底）：目标页还没被渲染出来（估算偏太远，落点差好几页）
+  /// → 用「当前落点页的真实位置 + 已知页高」重算目标页的像素位置。
+  ///
+  /// 页高来自 [_pageHeights]（探测/解码已知）或占位高；估算不准时下一轮
+  /// 会继续修正，直到 [_kAlignMaxRounds] 轮用尽。
+  bool _alignByEstimate(int gp, int landed) {
+    final ctx = _itemContexts[landed];
+    if (ctx == null || !ctx.mounted) return false;
+    final ro = ctx.findRenderObject();
+    final listRo = _listKey.currentContext?.findRenderObject();
+    if (ro is! RenderBox || !ro.attached || !ro.hasSize) return false;
+    if (listRo is! RenderBox || !listRo.attached || !listRo.hasSize) {
+      return false;
+    }
+    // 落点页在滚动坐标里的起始位置
+    final double base =
+        _scrollController.offset + (_leadingEdge(ro) - _leadingEdge(listRo));
+    double target = base;
+    if (gp > landed) {
+      for (int i = landed; i < gp; i++) {
+        target += _pageHeight(i) + kPageSpacing;
+      }
+    } else {
+      for (int i = gp; i < landed; i++) {
+        target -= _pageHeight(i) + kPageSpacing;
+      }
+    }
+    if (target < 0) target = 0;
+    if ((target - _scrollController.offset).abs() < 0.5) return false;
+    _scrollController.jumpTo(target);
+    return true;
+  }
+
+  /// item / 视口在滚动方向「起始端」上的全局坐标。
+  ///
+  /// 垂直模式 = 上边；水平从左到右 = 左边；水平从右到左 = 右边。
+  double _leadingEdge(RenderBox ro) {
+    final bool horizontal = reader.mode != ReaderMode.continuousTopToBottom;
+    final bool reverse = reader.mode == ReaderMode.continuousRightToLeft;
+    if (horizontal) {
+      return reverse
+          ? ro.localToGlobal(Offset(ro.size.width, 0)).dx
+          : ro.localToGlobal(Offset.zero).dx;
+    }
+    return ro.localToGlobal(Offset.zero).dy;
+  }
+
 
   /// Called by the reader after a chapter switch's images are ready.
   /// Resets the spliced list synchronously (no null window) and scrolls to
@@ -1580,9 +1998,14 @@ class ContinuousModeState extends State<ContinuousMode>
           width = double.infinity;
         }
 
-        final double itemPlaceholder = reader.mode == ReaderMode.continuousTopToBottom
-            ? reader.size.height
-            : reader.size.width;
+        // 已知真实页高（探测/解码得到）就按真实高布局：图片还没解码出来时
+        // 也不会先用占位高（视口高 1208px）、再突变成真实高（423~3382px）
+        // —— 那一下会把上方内容整体推走，也是跳转落点偏的直接原因。
+        // 未知页仍用占位高，与 [_pageHeights] 的回退值保持一致（双轨同源）。
+        final double itemPlaceholder = _pageHeights[index] ??
+            (reader.mode == ReaderMode.continuousTopToBottom
+                ? reader.size.height
+                : reader.size.width);
         return _ItemContextRegistrar(
           key: ValueKey('registrar_$imageKey'),
           index: index,
@@ -1866,6 +2289,7 @@ class ContinuousModeState extends State<ContinuousMode>
         _buildSplicedItem,
         version: _spliceVersion,
         childCount: _spliced.length + 2,
+        totalExtent: _totalExtent,
       ),
       // addSemanticIndexes 由 delegate 负责（见 _SplicedPageDelegate）
       // 测试态覆盖 cacheExtent（全量 build item），生产传 null 走默认
@@ -1996,6 +2420,9 @@ class ContinuousModeState extends State<ContinuousMode>
     _layoutCrossAxis = reader.mode == ReaderMode.continuousTopToBottom
         ? width
         : height;
+    // 显示宽高确定后，用已知像素尺寸回填页高（首帧就能按真实高度布局，
+    // 不用等图片解码）。见 [_syncPageHeightsFromCache]。
+    _syncPageHeightsFromCache();
 
     return PhotoView.customChild(
       backgroundDecoration: BoxDecoration(color: context.colorScheme.surface),
@@ -2014,13 +2441,17 @@ class ContinuousModeState extends State<ContinuousMode>
   }
 
   @override
-  Future<void> animateToPage(int page) {
-    int gp = _spliced.globalGpForChapterPage(reader.chapter, page);
-    return _scrollController.animateTo(
+  Future<void> animateToPage(int page) async {
+    final int gp = _spliced.globalGpForChapterPage(reader.chapter, page);
+    await _scrollController.animateTo(
       _offsetForGp(gp),
       duration: const Duration(milliseconds: 200),
       curve: Curves.ease,
     );
+    // 动画的目标偏移同样是估算值（页高异步到位后会偏），动画结束后按
+    // 真实布局位置校正落点。等校正完成再返回，调用方（reader）的
+    // syncCurrentPage() 才会拿到校正后的页码。
+    await _alignToGp(gp);
   }
 
   @override
@@ -2078,9 +2509,8 @@ class ContinuousModeState extends State<ContinuousMode>
 
   @override
   void toPage(int page) {
-    int gp = _spliced.globalGpForChapterPage(reader.chapter, page);
-    _scrollController.jumpTo(_offsetForGp(gp));
-    _futurePosition = null;
+    final int gp = _spliced.globalGpForChapterPage(reader.chapter, page);
+    _jumpToGp(gp);
   }
 
   @override

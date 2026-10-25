@@ -1,8 +1,8 @@
 # 连续滚动：跳转落点精度方案（读文件头拿真实页高）
 
-> **状态**：方案已定，**2026-10-25 开工**。
+> **状态**：**已实现并本地验证**（2026-10-25）。
 > 起因：用户报「点进度条后内容跳了但页码/滑块不动」。页码那半已修（见文末「已修部分」），
-> 剩下的「落点不准」是独立问题，本文档记录根因、数据和实施方案。
+> 剩下的「落点不准」是独立问题，本文档记录根因、数据、实施方案与实测结果。
 > 配套：`../0_必看.md`（任务路由）、`TESTING.md`（测试命令）、`BUILD_WINDOWS.md`（本地构建）。
 
 ---
@@ -51,7 +51,7 @@
 
 ---
 
-## 二、方案 A：读图片文件头拿真实宽高（推荐，已定）
+## 二、方案 A：读图片文件头拿真实宽高（已实现）
 
 ### 2.1 思路
 
@@ -63,57 +63,83 @@
 | JPEG | 扫描 `SOF0/1/2/...` 段，取 `height(2B) width(2B)` |
 | PNG | `IHDR` 段，宽高各 4B BE |
 | GIF | 逻辑屏宽高各 2B LE |
+| BMP | DIB 头宽高 |
+| AVIF/HEIF | `ispe` box（宽高各 4B BE） |
 
 - **本地已下载的章**：直接读本地文件 → **零网络、零解码**。
 - **网络章**：发 `Range: bytes=0-65535` 请求 → 每页一个小请求
-  （20 页约 1.3MB，比加载 20 张整图小一个数量级）。
-- 探测结果写回现有 `ImageSizeCache` → `_resetSplicedState()` 会自动把缓存里的真实高
-  回填进 `_pageHeights` → **跳转偏移自动变准，代码结构不用改**。
+  （50 页约 3.2MB，比加载 50 张整图小一个数量级）。
+- 探测结果写回现有 `ImageSizeCache` → 跨会话持久化，下次开章直接命中。
 
-### 2.2 接入点（现成的，不用重构）
+### 2.2 接入点
 
 | 位置 | 作用 |
 |---|---|
-| `lib/foundation/image_size_cache.dart` | `get(imageKey)` / `put(imageKey, size)`，key = URL 或 `file://` 路径；`put` 已带 debounce 写 JSON |
-| `lib/pages/reader/images.dart` `_resetSplicedState()` | 章节加载时用 `ImageSizeCache` 回填 `_pageHeights`（**探测结果写进缓存，这里自动生效**） |
-| `lib/pages/reader/images.dart` `_computeAxisSize()` | 像素尺寸 → 显示高度 |
+| `lib/foundation/image_size_probe.dart` | **新建**：头解析 + 本地文件读 + Dio Range 请求 |
+| `lib/foundation/image_size_cache.dart` | `get/put` 尺寸缓存（探测结果写这里，跨会话复用） |
+| `lib/pages/reader/images.dart` `_scheduleSizeProbe()` | 章节就绪后后台探测（并发 3） |
+| `lib/pages/reader/images.dart` `_applyProbedSize()` | 探测结果回填 `_pageHeights` |
+| `lib/pages/reader/images.dart` `_buildSplicedItem()` | 已知页高直接当 `placeholderHeight`，布局与估算同源 |
+| `lib/pages/reader/images.dart` `_SplicedPageDelegate` | 覆写 `estimateMaxScrollOffset`，跳转不再被 clamp |
+| `lib/pages/reader/images.dart` `_alignToGp()` | 跳转后按真实布局位置二次校正落点 |
 
-### 2.3 待建模块
+### 2.3 核心不变量：「估算基准 == 真实布局高度」
 
-`lib/foundation/image_size_probe.dart`：
+跳转偏移 = Σ `_pageHeights`，而**落点由各 item 的实际布局高度决定**。
+两者必须逐页相等，否则偏移算得再准也落不对。
 
-```
-Future<Size?> probeImageSize(String imageKey)
-  ├─ file:// → dart:io 读前 64KB → 解析头
-  ├─ http(s) → Dio Range 请求（ResponseType.stream，读够就 cancel）→ 解析头
-  └─ 失败/不支持 Range → 返回 null（回退占位高，不崩）
-```
+由此推出两条硬规则（实现里都靠它保证）：
 
-调度：章节图片列表拿到后，**后台**低并发探测本章所有页（并发 3~4，
-与 `ContinuousModeState._kMaxConcurrentDownloads` 一致）→ `ImageSizeCache.put`。
-**不在跳转路径上同步等待**，UI 不卡。
+1. **已知页高 → 布局就用它**：`_buildSplicedItem` 把 `placeholderHeight` 取成
+   `_pageHeights[index]`（未知才回退占位高）。图片还没解码时 item 就按真实高度
+   布局，不会「先占位高、再突变成真实高」把上方内容顶走。
+2. **已渲染出来的页不改估算**：探测结果只回填「还没被 build 出来」的页。
+   已 build 的页布局高度已是既成事实（占位高或已解码高度），改估算只会让
+   两者脱节——等图片解码时 `onImageLoaded` 会同时更新布局和 `_pageHeights`。
 
-### 2.4 验收标准
+> 这两条是整个修复能成立的前提。违反其中任何一条都会让「偏移算对、落点还是偏」。
 
-1. 单测：WebP / JPEG / PNG 头解析各一例（含损坏数据返回 null）。
-2. 跳转精度测试：模拟 50 页、只有前 10 页尺寸已知 → 跳到第 30 页
-   → 断言视口顶部 item == 第 30 页（不再偏 1~13 页）。
-3. 回归：`test/reader_continuous_scroll_test.dart`（已知 2 个基线红用例除外，见 TESTING.md 第六节）
-   + `test/custom_slider_test.dart` 全绿。
-4. `flutter analyze` 0 warning（CI `fatal-warnings: true`）。
+### 2.4 跳转落点校正（`_alignToGp`）
 
-### 2.5 风险与回退
+即便有上述不变量，仍可能有残差（页高异步到位、估算偏太远导致目标页没被 build）。
+跳转后按帧核对实际落点，偏差则用两种方式之一修正，最多 3 轮：
 
-| 风险 | 处理 |
+- `_alignByRenderBox`：目标页已在渲染树里 → 直接用它的真实布局位置对齐（最准）。
+- `_alignByEstimate`：目标页还没被 build → 用「当前落点页的真实位置 + 已知页高」
+  重算目标页的像素位置。
+
+期间被新的跳转取代（用户又点了进度条）立即放弃，不跟用户抢。
+
+### 2.5 顺带修掉的两个问题
+
+- **`jumpTo` 被 clamp**：`_SplicedPageDelegate` 默认按「已布局 item 的平均 extent ×
+  item 总数」外推总长，页高差异大时算出的 `maxScrollExtent` 偏小 → 跳转被截断。
+  覆写成「逐页累加已知高度」后消失。
+- **页码在页边界上差 1**：`_currentPageFromViewport` 原先用 `Rect.overlaps` 判可见，
+  视口顶边恰好落在页边界时上一页会因浮点误差被判成「可见」且起始边更小 →
+  页码显示 N-1。改成「视口在起始端内缩 0.5px」后判定稳定。
+
+### 2.6 验收结果（本地实测）
+
+| 项 | 结果 |
 |---|---|
-| 服务器不支持 Range | 探测返回 null → 回退占位高（= 现状），不崩、不阻塞 |
-| 每章几十个小请求 | 后台低并发 + 只探测未缓存的页；探测失败不重试 |
-| 探测请求拖慢开章 | 不阻塞 UI：先按占位高渲染，尺寸到了自动回填 → 页高修正后视口会微调 |
-| `ImageSizeCache` 写入竞争 | 复用现有 `put`（已 debounce 落盘） |
+| `test/image_size_probe_test.dart` | 14/14 通过（8 种格式正例 + 6 个异常输入返回 null） |
+| `test/reader_jump_precision_test.dart` | 2/2 通过（页高已知 → 跳第 30 页精确落第 30 页；页高未知 → 降级自洽） |
+| `flutter analyze` | 无新增 warning / info（基线 13 条 info 未变） |
+| `flutter test`（全量） | 49 通过 / 8 失败 = 基线同款（6 条缺原生 DLL：rhttp.dll、flutter_qjs_plugin.dll；2 条 `reader_continuous_scroll_test.dart` 基线红用例，失败形态仍是 300ms pending timer） |
+
+**已知限制**：
+
+1. 从右到左连续滚动（`continuousRightToLeft`）的滚动方向是反的，
+   `_offsetForGp` 算的是 sliver 正向偏移、与 `pixels` 差一个总长 → 该模式的跳转
+   落点**不在本次修复范围**（垂直 / 从左到右已修）。
+2. 探测失败（服务器不支持 Range、图床要 Referer 且拿不到、格式不认识）一律回退
+   占位高，不崩不阻塞；此时落点精度退回修复前水平。
+3. 探测结果对**已渲染出来的页**不生效（见 §2.3 规则 2），这些页要等图片解码。
 
 ---
 
-## 三、已修部分（2026-10-24，本次已 push）
+## 三、已修部分（2026-10-24）
 
 commit `c9e8d50`（CI analyze 由红转绿见 `2ab9b80`）：
 

@@ -77,6 +77,25 @@ $env:PATH = "D:\edge;D:\flutter_3.44.0\bin;$env:PATH"
 flutter test test/reader_continuous_scroll_test.dart --no-pub
 ```
 
+### 2.3 跳转落点精度测试（test/reader_jump_precision_test.dart）
+
+- **测什么**：「点第 N 页 → 精确落在第 N 页」。50 页、4 种长宽比交替（显示高 200/600/1600/400，占位高 600 几乎必然算错）。
+  - 用例 1：页高全部已知（= 探测已完成，写进 `ImageSizeCache`）→ 跳到第 30 页，断言 `testCurrentPage == 30` 且偏移 == 前 29 页真实高度之和。
+  - 用例 2：页高未知 → 降级不崩，且「reader 页码 == 视口实际落点」自洽。
+- **写缓存要用 `ImageSizeCache.instance.putForTest`**：`put()` 会挂 2 秒落盘定时器，widget 测试会以 "A Timer is still pending" 失败。
+- **收尾要 `await tester.pump(const Duration(milliseconds: 400))`**：滚动会挂 300ms 的 `delayedSetIsScrolling` 定时器，不等它落地同样报 pending timer。
+
+```powershell
+cd D:\mycode\venera
+$env:PATH = "D:\edge;D:\flutter_3.44.0\bin;$env:PATH"
+flutter test test/reader_jump_precision_test.dart --no-pub
+```
+
+### 2.4 图片头解析单测（test/image_size_probe_test.dart）
+
+- 锁住「读文件头拿真实宽高」的解析正确性：WebP(VP8X/VP8L/VP8) / JPEG(SOF0) / PNG(IHDR) / GIF / BMP / AVIF(ispe) 各一例 + 6 个垃圾输入必须返回 null。
+- 纯函数，秒级；改 `lib/foundation/image_size_probe.dart` 后必跑。
+
 ---
 
 ## 三、断言盲区补强（轨迹记录器）

@@ -84,6 +84,15 @@ class ImageSizeCache {
     _scheduleFlush();
   }
 
+  /// 只写内存层，不触发落盘定时器。
+  ///
+  /// 仅供测试使用：[put] 会挂一个 2 秒 debounce 定时器，widget 测试里
+  /// 会以「A Timer is still pending」失败。
+  @visibleForTesting
+  void putForTest(String imageKey, int width, int height) {
+    _cache[imageKey] = Size(width.toDouble(), height.toDouble());
+  }
+
   Timer? _flushTimer;
   bool _flushing = false;
 
