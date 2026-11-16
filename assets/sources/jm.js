@@ -16,7 +16,7 @@ class JM extends ComicSource {
     static jmPkgName = "com.example.app"
 
     // update url（jsdelivr 从本仓库 assets/sources/jm.js 取，用于检查更新）
-    url = "https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/assets/sources/jm.js"
+    url = "https://gcore.jsdelivr.net/gh/lll152872/venera-lll@master/assets/sources/jm.js"
 
     dailyCheckInInProgress = false
 

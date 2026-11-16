@@ -31,7 +31,7 @@ class Kubb extends ComicSource {
   key = 'kubb';
   version = '1.0.2';
   minAppVersion = '1.4.0';
-  url = 'https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/kubb.js';
+  url = 'https://gcore.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/kubb.js';
 
   baseUrl = 'https://www.kubb.cc';
   imgHost = 'https://wx4.top'; // 图床域（子域名不固定：p. / t. 等）

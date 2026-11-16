@@ -32,7 +32,7 @@ class ManWang extends ComicSource {
   key = 'manwang';
   version = '1.0.0';
   minAppVersion = '1.4.0';
-  url = 'https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/manwang.js';
+  url = 'https://gcore.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/manwang.js';
 
   baseUrl = 'https://www.manwang.net';
   // 图片防盗链需要的 Referer（站点根，不能带路径）

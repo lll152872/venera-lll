@@ -18,7 +18,7 @@ class Mhua5 extends ComicSource {
   key = 'mhua5';
   version = '1.0.2';
   minAppVersion = '1.4.0';
-  url = 'https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/mhua5.js';
+  url = 'https://gcore.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/mhua5.js';
 
   baseUrl = 'https://www.mhua5.com';
   imgHost = 'https://s2.baozimh.com';

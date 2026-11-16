@@ -4,7 +4,7 @@ class ManWaBa extends ComicSource {
   key = 'manwaba';
   version = '1.4.0';
   minAppVersion = '1.4.0';
-  url = 'https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/assets/sources/manwaba.js';
+  url = 'https://gcore.jsdelivr.net/gh/lll152872/venera-lll@master/assets/sources/manwaba.js';
   // 修复①：原 mwuu.cc 已失效，实际可用域名为 manwapi.cc；2026-08 起 manwapi.cc 301 到 manwali.cc
   // 修复⑥（2026-09-01 实测）：manwali.cc 已 301 → manwari.cc。
   //   旧域名每次请求都要多付一次 DNS+TCP+TLS 往返，实测 TTFB 1059ms vs 直连 565ms，慢近一倍。

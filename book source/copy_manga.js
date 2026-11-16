@@ -4,11 +4,11 @@ class CopyManga extends ComicSource {
 
     key = "copy_manga"
 
-    version = "1.4.1"
+    version = "1.4.2"
 
     minAppVersion = "1.6.0"
 
-    url = "https://cdn.jsdelivr.net/gh/venera-app/venera-configs@main/copy_manga.js"
+    url = "https://gcore.jsdelivr.net/gh/venera-app/venera-configs@main/copy_manga.js"
 
     async getReqID() {
         if (this.copyRegion === "0") {
@@ -711,7 +711,7 @@ class CopyManga extends ComicSource {
             ])
 
             if (results[0].status !== 200) {
-                throw `Invalid status code: ${res.status}`;
+                throw `Invalid status code: ${results[0].status}`;
             }
 
             let data = JSON.parse(results[0].body).results;
@@ -1099,7 +1099,7 @@ class CopyManga extends ComicSource {
         const res = await fetch(url, { headers: this.headers });
         if (res.status === 200) {
             let data = await res.json();
-            this.settings.base_url = data.results.api[0][0];
+            this.settings.base_url.default = data.results.api[0][0];
         }
     }
 }

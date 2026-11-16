@@ -20,7 +20,7 @@ class WarChina extends ComicSource {
   key = 'warchina';
   version = '1.0.3';
   minAppVersion = '1.4.0';
-  url = 'https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/warchina.js';
+  url = 'https://gcore.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/warchina.js';
 
   baseUrl = 'https://warchina.com';
   imgHost = 'https://www.warchina.com';

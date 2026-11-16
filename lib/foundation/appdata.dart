@@ -448,4 +448,4 @@ async function processImage(image, cid, eid, page, sourceKey) {
 /// 本 fork 使用自有源库，上游官方库（venera-app/venera-configs）里没有本
 /// fork 的源，若沿用官方地址会导致「检查更新」永远返回没有更新。
 const defaultSourceListUrl =
-    "https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/index.json";
+    "https://gcore.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/index.json";

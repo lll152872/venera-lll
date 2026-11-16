@@ -3,70 +3,245 @@
     "name": "拷贝漫画",
     "key": "copy_manga",
     "fileName": "copy_manga.js",
-    "version": "1.4.1",
-    "url": "https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/copy_manga.js"
+    "version": "1.4.2",
+    "url": "https://gcore.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/copy_manga.js"
   },
   {
     "name": "包子漫画",
     "key": "baozi",
     "fileName": "baozi.js",
     "version": "1.2.0",
-    "url": "https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/baozi.js"
+    "url": "https://gcore.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/baozi.js"
   },
   {
     "name": "禁漫天堂",
     "key": "jm",
     "fileName": "jm.js",
     "version": "1.4.5",
-    "url": "https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/jm.js"
+    "url": "https://gcore.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/jm.js"
   },
   {
     "name": "hitomi.la",
     "key": "hitomi",
     "fileName": "hitomi.js",
     "version": "1.1.2",
-    "url": "https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/hitomi.js"
+    "url": "https://gcore.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/hitomi.js"
   },
   {
     "name": "漫蛙吧",
     "key": "manwaba",
     "fileName": "manwaba.js",
     "version": "1.4.0",
-    "url": "https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/manwaba.js"
+    "url": "https://gcore.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/manwaba.js"
   },
   {
     "name": "虫虫漫画",
     "key": "warchina",
     "fileName": "warchina.js",
     "version": "1.0.3",
-    "url": "https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/warchina.js"
+    "url": "https://gcore.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/warchina.js"
   },
   {
     "name": "漫画柜",
     "key": "ManHuaGui",
     "fileName": "manhuagui.js",
     "version": "1.2.1",
-    "url": "https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/manhuagui.js"
+    "url": "https://gcore.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/manhuagui.js"
   },
   {
     "name": "漫网",
     "key": "manwang",
     "fileName": "manwang.js",
     "version": "1.0.0",
-    "url": "https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/manwang.js"
+    "url": "https://gcore.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/manwang.js"
   },
   {
     "name": "漫画屋",
     "key": "mhua5",
     "fileName": "mhua5.js",
     "version": "1.0.2",
-    "url": "https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/mhua5.js"
+    "url": "https://gcore.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/mhua5.js"
   },
   {
     "name": "酷笔漫画",
     "key": "kubb",
     "fileName": "kubb.js",
     "version": "1.0.2",
-    "url": "https://cdn.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/kubb.js"
+    "url": "https://gcore.jsdelivr.net/gh/lll152872/venera-lll@master/book%20source/kubb.js"
+  },
+  {
+    "name": "再漫画",
+    "key": "zaimanhua",
+    "fileName": "zaimanhua.js",
+    "version": "1.0.2",
+    "url": "https://gcore.jsdelivr.net/gh/venera-app/venera-configs@master/zaimanhua.js"
+  },
+  {
+    "name": "爱看漫",
+    "key": "ikmmh",
+    "fileName": "ikmmh.js",
+    "version": "1.0.6",
+    "url": "https://gcore.jsdelivr.net/gh/venera-app/venera-configs@master/ikmmh.js"
+  },
+  {
+    "name": "GoDa漫画",
+    "key": "goda",
+    "fileName": "goda.js",
+    "version": "1.2.1",
+    "url": "https://gcore.jsdelivr.net/gh/venera-app/venera-configs@master/goda.js"
+  },
+  {
+    "name": "comick",
+    "key": "comick",
+    "fileName": "comick.js",
+    "version": "1.2.0",
+    "url": "https://gcore.jsdelivr.net/gh/venera-app/venera-configs@master/comick.js"
+  },
+  {
+    "name": "嬉皮漫画",
+    "key": "hipmh",
+    "fileName": "hipmh.js",
+    "version": "1.0.1",
+    "url": "https://gcore.jsdelivr.net/gh/Y-Ymeow/venera-configs@main/hipmh.js"
+  },
+  {
+    "name": "百合会",
+    "key": "baihehui",
+    "fileName": "baihehui.js",
+    "version": "1.0.0",
+    "url": "https://gcore.jsdelivr.net/gh/venera-app/venera-configs@main/baihehui.js"
+  },
+  {
+    "name": "CCC追漫台",
+    "key": "ccc",
+    "fileName": "ccc.js",
+    "version": "1.0.1",
+    "url": "https://gcore.jsdelivr.net/gh/venera-app/venera-configs@main/ccc.js"
+  },
+  {
+    "name": "カドコミ",
+    "key": "comic_walker",
+    "fileName": "comic_walker.js",
+    "version": "1.0.1",
+    "url": "https://gcore.jsdelivr.net/gh/venera-app/venera-configs@main/comic_walker.js"
+  },
+  {
+    "name": "ehentai",
+    "key": "ehentai",
+    "fileName": "ehentai.js",
+    "version": "1.2.0",
+    "url": "https://gcore.jsdelivr.net/gh/venera-app/venera-configs@main/ehentai.js"
+  },
+  {
+    "name": "嗨皮漫画",
+    "key": "happy",
+    "fileName": "happy.js",
+    "version": "1.0.0",
+    "url": "https://gcore.jsdelivr.net/gh/venera-app/venera-configs@main/happy.js"
+  },
+  {
+    "name": "H-Comic",
+    "key": "hcomic",
+    "fileName": "hcomic.js",
+    "version": "1.0.0",
+    "url": "https://gcore.jsdelivr.net/gh/venera-app/venera-configs@main/hcomic.js"
+  },
+  {
+    "name": "热辣漫画",
+    "key": "hot_manga",
+    "fileName": "hot_manga.js",
+    "version": "1.0.0",
+    "url": "https://gcore.jsdelivr.net/gh/venera-app/venera-configs@main/hot_manga.js"
+  },
+  {
+    "name": "jcomic.net",
+    "key": "jcomic",
+    "fileName": "jcomic.js",
+    "version": "1.0.0",
+    "url": "https://gcore.jsdelivr.net/gh/venera-app/venera-configs@main/jcomic.js"
+  },
+  {
+    "name": "Komiic",
+    "key": "Komiic",
+    "fileName": "komiic.js",
+    "version": "1.0.3",
+    "url": "https://gcore.jsdelivr.net/gh/venera-app/venera-configs@main/komiic.js"
+  },
+  {
+    "name": "MangaDex",
+    "key": "manga_dex",
+    "fileName": "manga_dex.js",
+    "version": "1.2.0",
+    "url": "https://gcore.jsdelivr.net/gh/venera-app/venera-configs@main/manga_dex.js"
+  },
+  {
+    "name": "漫画人",
+    "key": "manhuaren",
+    "fileName": "manhuaren.js",
+    "version": "1.0.0",
+    "url": "https://gcore.jsdelivr.net/gh/venera-app/venera-configs@main/manhuaren.js"
+  },
+  {
+    "name": "漫画1234",
+    "key": "mh1234",
+    "fileName": "mh1234.js",
+    "version": "1.0.0",
+    "url": "https://gcore.jsdelivr.net/gh/venera-app/venera-configs@main/mh1234.js"
+  },
+  {
+    "name": "18漫画",
+    "key": "mh18",
+    "fileName": "mh18.js",
+    "version": "1.0.0",
+    "url": "https://gcore.jsdelivr.net/gh/venera-app/venera-configs@main/mh18.js"
+  },
+  {
+    "name": "漫小肆",
+    "key": "mxs",
+    "fileName": "mxs.js",
+    "version": "1.0.0",
+    "url": "https://gcore.jsdelivr.net/gh/venera-app/venera-configs@main/mxs.js"
+  },
+  {
+    "name": "MYCOMIC",
+    "key": "mycomic",
+    "fileName": "mycomic.js",
+    "version": "1.1.0",
+    "url": "https://gcore.jsdelivr.net/gh/venera-app/venera-configs@main/mycomic.js"
+  },
+  {
+    "name": "nhentai",
+    "key": "nhentai",
+    "fileName": "nhentai.js",
+    "version": "1.1.0",
+    "url": "https://gcore.jsdelivr.net/gh/venera-app/venera-configs@main/nhentai.js"
+  },
+  {
+    "name": "哔咔漫画",
+    "key": "picacg",
+    "fileName": "picacg.js",
+    "version": "1.0.6",
+    "url": "https://gcore.jsdelivr.net/gh/venera-app/venera-configs@main/picacg.js"
+  },
+  {
+    "name": "少年ジャンプ＋",
+    "key": "shonen_jump_plus",
+    "fileName": "shonen_jump_plus.js",
+    "version": "1.1.1",
+    "url": "https://gcore.jsdelivr.net/gh/venera-app/venera-configs@main/shonen_jump_plus.js"
+  },
+  {
+    "name": "紳士漫畫",
+    "key": "wnacg",
+    "fileName": "wnacg.js",
+    "version": "1.0.6",
+    "url": "https://gcore.jsdelivr.net/gh/venera-app/venera-configs@main/wnacg.js"
+  },
+  {
+    "name": "优酷漫画",
+    "key": "ykmh",
+    "fileName": "ykmh.js",
+    "version": "1.0.0",
+    "url": "https://gcore.jsdelivr.net/gh/venera-app/venera-configs@main/ykmh.js"
   }
 ]
