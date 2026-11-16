@@ -33,7 +33,7 @@ class Baozi extends ComicSource {
         { value: "twmanga.com" },
         { value: "dinnerku.com" },
       ],
-      default: "bzmgcn.com",
+      default: "webmota.com",
     },
     cdn_domains: {
       title: "图片资源站域名",
